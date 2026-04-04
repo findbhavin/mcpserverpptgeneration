@@ -1,7 +1,38 @@
 from mcp.server.fastmcp import FastMCP
-from core import generate_presentation, image_to_presentation, format_document
+from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts
 
 mcp = FastMCP("pptx_generator")
+
+@mcp.tool()
+def process_pdf(
+    pdf_source: str, 
+    is_url: bool = True, 
+    instructions: str = "", 
+    layout_theme: str = "", 
+    visual_iconography: str = "", 
+    slide_content_rules: str = "",
+    target_format: str = "pptx"
+) -> str:
+    """
+    Takes a fresh PDF file and instructions, converting it into a styled PPTX or formatted DOCX.
+    Args:
+        pdf_source: URL, file path, or base64 string of the PDF.
+        is_url: True if pdf_source is a URL/file path, False if raw base64 string.
+        instructions: Abstract requests/instructions for how the content should be treated.
+        layout_theme: Requested theme (e.g., 'Modern Corporate', 'Dark Mode').
+        visual_iconography: Rules regarding icons and imagery.
+        slide_content_rules: Guidelines on how to split text across slides.
+        target_format: 'pptx' or 'docx'.
+    Returns the URL/path to the generated file.
+    """
+    result = process_pdf_to_artifacts(
+        pdf_source, is_url, instructions, layout_theme, 
+        visual_iconography, slide_content_rules, target_format
+    )
+    if result["success"]:
+        return result["file_url"]
+    else:
+        return result["message"]
 
 @mcp.tool()
 def generate_pptx(python_code: str) -> str:

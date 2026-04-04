@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import os
 import uvicorn
 
-from core import generate_presentation, image_to_presentation, format_document, stats, OUTPUT_DIR
+from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, stats, OUTPUT_DIR
 from mcp_server import mcp
 
 app = FastAPI(title="PPTX Generator API", description="API and UI for generating PowerPoint presentations")
@@ -25,6 +25,15 @@ class ImageRequest(BaseModel):
 class DocxRequest(BaseModel):
     doc_source: str
     is_url: bool = True
+
+class PdfRequest(BaseModel):
+    pdf_source: str
+    is_url: bool = True
+    instructions: str = ""
+    layout_theme: str = ""
+    visual_iconography: str = ""
+    slide_content_rules: str = ""
+    target_format: str = "pptx"
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -68,10 +77,11 @@ async def index():
                 </div>
             </div>
 
-            <div style="display: flex; gap: 20px; margin-bottom: 20px;">
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;">
                 <button id="tabCode" style="flex: 1; background: #007bff;" onclick="switchTab('code')">Generate from Code</button>
-                <button id="tabImage" style="flex: 1; background: #6c757d;" onclick="switchTab('image')">Convert Image to PPTX</button>
+                <button id="tabImage" style="flex: 1; background: #6c757d;" onclick="switchTab('image')">Image to PPTX</button>
                 <button id="tabDocx" style="flex: 1; background: #6c757d;" onclick="switchTab('docx')">Format DOCX Template</button>
+                <button id="tabPdf" style="flex: 1; background: #6c757d;" onclick="switchTab('pdf')">Process PDF</button>
             </div>
 
             <div id="sectionCode">
@@ -103,6 +113,25 @@ prs.save('output.pptx')"></textarea>
                 </form>
             </div>
 
+            <div id="sectionPdf" style="display: none;">
+                <h2>Process PDF to Presentation/Document</h2>
+                <form id="pdfForm">
+                    <input type="text" id="pdfSource" placeholder="Enter PDF File URL or Base64..." style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" required>
+                    
+                    <textarea id="pdfInstructions" placeholder="Abstract Instructions (e.g., 'Extract financial tables only')..." style="height: 60px;"></textarea>
+                    <input type="text" id="pdfLayoutTheme" placeholder="Layout Theme (e.g., 'Modern Corporate')" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                    <input type="text" id="pdfIconography" placeholder="Visual Iconography (e.g., 'Flat design, tech icons')" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                    <textarea id="pdfContentRules" placeholder="Slide Content Rules (e.g., 'Max 5 bullets per slide')..." style="height: 60px;"></textarea>
+                    
+                    <select id="pdfTargetFormat" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
+                        <option value="pptx">Generate PPTX</option>
+                        <option value="docx">Generate DOCX</option>
+                    </select>
+
+                    <button type="submit" id="submitPdfBtn">Process PDF</button>
+                </form>
+            </div>
+
             <div id="resultBox" class="result"></div>
         </div>
 
@@ -111,9 +140,11 @@ prs.save('output.pptx')"></textarea>
                 document.getElementById('sectionCode').style.display = tab === 'code' ? 'block' : 'none';
                 document.getElementById('sectionImage').style.display = tab === 'image' ? 'block' : 'none';
                 document.getElementById('sectionDocx').style.display = tab === 'docx' ? 'block' : 'none';
+                document.getElementById('sectionPdf').style.display = tab === 'pdf' ? 'block' : 'none';
                 document.getElementById('tabCode').style.background = tab === 'code' ? '#007bff' : '#6c757d';
                 document.getElementById('tabImage').style.background = tab === 'image' ? '#007bff' : '#6c757d';
                 document.getElementById('tabDocx').style.background = tab === 'docx' ? '#007bff' : '#6c757d';
+                document.getElementById('tabPdf').style.background = tab === 'pdf' ? '#007bff' : '#6c757d';
                 document.getElementById('resultBox').style.display = 'none';
             }}
 
@@ -238,6 +269,59 @@ prs.save('output.pptx')"></textarea>
                     btn.textContent = 'Format Document';
                 }}
             }});
+            document.getElementById('pdfForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                const btn = document.getElementById('submitPdfBtn');
+                const resultBox = document.getElementById('resultBox');
+                
+                const source = document.getElementById('pdfSource').value;
+                const instructions = document.getElementById('pdfInstructions').value;
+                const theme = document.getElementById('pdfLayoutTheme').value;
+                const iconography = document.getElementById('pdfIconography').value;
+                const rules = document.getElementById('pdfContentRules').value;
+                const format = document.getElementById('pdfTargetFormat').value;
+                
+                if (!source) return;
+                
+                btn.disabled = true;
+                btn.textContent = 'Processing...';
+                resultBox.style.display = 'none';
+                
+                try {{
+                    const response = await fetch('/api/process-pdf', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ 
+                            pdf_source: source, 
+                            is_url: true,
+                            instructions: instructions,
+                            layout_theme: theme,
+                            visual_iconography: iconography,
+                            slide_content_rules: rules,
+                            target_format: format
+                        }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    resultBox.style.display = 'block';
+                    if (data.success) {{
+                        resultBox.className = 'result success';
+                        resultBox.innerHTML = `<strong>Success!</strong> File generated. <br><a href="${{data.file_url}}" target="_blank">Download ${{data.filename || 'File'}}</a>`;
+                        setTimeout(() => window.location.reload(), 2000);
+                    }} else {{
+                        resultBox.className = 'result error';
+                        resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
+                    }}
+                }} catch (err) {{
+                    resultBox.style.display = 'block';
+                    resultBox.className = 'result error';
+                    resultBox.textContent = 'Network error occurred.';
+                }} finally {{
+                    btn.disabled = false;
+                    btn.textContent = 'Process PDF';
+                }}
+            }});
         </script>
     </body>
     </html>
@@ -259,6 +343,18 @@ async def api_image_to_pptx(request: ImageRequest):
 @app.post("/api/format-docx")
 async def api_format_docx(request: DocxRequest):
     return format_document(request.doc_source, request.is_url)
+
+@app.post("/api/process-pdf")
+async def api_process_pdf(request: PdfRequest):
+    return process_pdf_to_artifacts(
+        request.pdf_source, 
+        request.is_url, 
+        request.instructions, 
+        request.layout_theme, 
+        request.visual_iconography, 
+        request.slide_content_rules, 
+        request.target_format
+    )
 
 @app.get("/downloads/{execution_id}/{filename}")
 async def download_file(execution_id: str, filename: str):

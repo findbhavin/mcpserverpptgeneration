@@ -1,7 +1,8 @@
-feat: add image-to-pptx functionality, Web UI, and GCP deployment config
+feat: add Process PDF capability and MCP tool Customizations
 
-- Implement image_to_pptx endpoint for converting images to presentation slides
-- Add FastAPI application to serve both REST API and MCP protocol endpoints
-- Create Web Dashboard to track stats and manually trigger presentation generation
-- Setup Dockerfile, docker-compose.yml, and cloudbuild.yaml for GCP Cloud Run deployment
-- Update README.md with detailed API documentation and deployment steps
+- Integrated PyMuPDF (fitz) to process and parse PDF files
+- Added `process_pdf_to_artifacts` in core.py capable of converting PDFs to PPTX slides or text to DOCX
+- Exposed powerful LLM customizations (`instructions`, `layout_theme`, `visual_iconography`, `slide_content_rules`) natively to the `process_pdf` MCP tool API
+- Upgraded the Dashboard Web UI to include a "Process PDF" tab to manually accept these customizations and abstract logic
+- Updated `requirements.txt` with PyMuPDF
+- Updated `README.md` endpoints documentation

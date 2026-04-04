@@ -86,5 +86,20 @@ Converts an image into a presentation with a single slide perfectly fitting the 
 ```
 *(You can also pass a base64 string directly with `is_url: false` or a base64 data URI with `is_url: true`)*
 
+### `POST /api/process-pdf`
+Processes a fresh PDF file (or Base64 content) and converts it into a `pptx` or `docx` format, optionally taking into account instructions around layout themes, visual iconography, and slide content rules.
+
+**Request body:**
+```json
+{
+  "pdf_source": "https://example.com/report.pdf",
+  "is_url": true,
+  "instructions": "Extract financial tables only",
+  "layout_theme": "Modern Corporate",
+  "visual_iconography": "Flat design, tech icons",
+  "slide_content_rules": "Max 5 bullets per slide",
+  "target_format": "pptx"
+}
+```
 ### `GET /api/stats`
 Returns the current request and generation statistics.
