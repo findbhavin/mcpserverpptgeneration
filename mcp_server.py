@@ -1,5 +1,5 @@
 from mcp.server.fastmcp import FastMCP
-from core import generate_presentation, image_to_presentation
+from core import generate_presentation, image_to_presentation, format_document
 
 mcp = FastMCP("pptx_generator")
 
@@ -26,6 +26,23 @@ def image_to_pptx(image_source: str, is_url: bool = True) -> str:
     Returns the URL/path to the generated PPTX file.
     """
     result = image_to_presentation(image_source, is_url)
+    if result["success"]:
+        return result["file_url"]
+    else:
+        return result["message"]
+
+@mcp.tool()
+def apply_docx_template(doc_source: str, is_url: bool = True) -> str:
+    """
+    Takes an existing DOCX document and reformats it to strictly follow corporate guidelines:
+    - Global font: Aptos Narrow
+    - Auto-formats Tables, Table of Contents, Figures, and Headings
+    Args:
+        doc_source: URL, file path, or base64 string of the docx.
+        is_url: True if doc_source is a URL/file path, False if raw base64 string.
+    Returns the URL/path to the newly formatted DOCX file.
+    """
+    result = format_document(doc_source, is_url)
     if result["success"]:
         return result["file_url"]
     else:

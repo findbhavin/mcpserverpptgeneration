@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import os
 import uvicorn
 
-from core import generate_presentation, image_to_presentation, stats, OUTPUT_DIR
+from core import generate_presentation, image_to_presentation, format_document, stats, OUTPUT_DIR
 from mcp_server import mcp
 
 app = FastAPI(title="PPTX Generator API", description="API and UI for generating PowerPoint presentations")
@@ -20,6 +20,10 @@ class GenerateRequest(BaseModel):
 
 class ImageRequest(BaseModel):
     image_source: str
+    is_url: bool = True
+
+class DocxRequest(BaseModel):
+    doc_source: str
     is_url: bool = True
 
 @app.get("/", response_class=HTMLResponse)
@@ -67,6 +71,7 @@ async def index():
             <div style="display: flex; gap: 20px; margin-bottom: 20px;">
                 <button id="tabCode" style="flex: 1; background: #007bff;" onclick="switchTab('code')">Generate from Code</button>
                 <button id="tabImage" style="flex: 1; background: #6c757d;" onclick="switchTab('image')">Convert Image to PPTX</button>
+                <button id="tabDocx" style="flex: 1; background: #6c757d;" onclick="switchTab('docx')">Format DOCX Template</button>
             </div>
 
             <div id="sectionCode">
@@ -90,6 +95,14 @@ prs.save('output.pptx')"></textarea>
                 </form>
             </div>
 
+            <div id="sectionDocx" style="display: none;">
+                <h2>Format Document (Apply Template)</h2>
+                <form id="docxForm">
+                    <input type="text" id="docxSource" placeholder="Enter DOCX File URL or Base64..." style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" required>
+                    <button type="submit" id="submitDocxBtn">Format Document</button>
+                </form>
+            </div>
+
             <div id="resultBox" class="result"></div>
         </div>
 
@@ -97,8 +110,10 @@ prs.save('output.pptx')"></textarea>
             function switchTab(tab) {{
                 document.getElementById('sectionCode').style.display = tab === 'code' ? 'block' : 'none';
                 document.getElementById('sectionImage').style.display = tab === 'image' ? 'block' : 'none';
+                document.getElementById('sectionDocx').style.display = tab === 'docx' ? 'block' : 'none';
                 document.getElementById('tabCode').style.background = tab === 'code' ? '#007bff' : '#6c757d';
                 document.getElementById('tabImage').style.background = tab === 'image' ? '#007bff' : '#6c757d';
+                document.getElementById('tabDocx').style.background = tab === 'docx' ? '#007bff' : '#6c757d';
                 document.getElementById('resultBox').style.display = 'none';
             }}
 
@@ -183,6 +198,46 @@ prs.save('output.pptx')"></textarea>
                     btn.textContent = 'Convert to PPTX';
                 }}
             }});
+            document.getElementById('docxForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                const btn = document.getElementById('submitDocxBtn');
+                const resultBox = document.getElementById('resultBox');
+                const source = document.getElementById('docxSource').value;
+                
+                if (!source) return;
+                
+                btn.disabled = true;
+                btn.textContent = 'Formatting...';
+                resultBox.style.display = 'none';
+                
+                try {{
+                    const response = await fetch('/api/format-docx', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ doc_source: source, is_url: true }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    resultBox.style.display = 'block';
+                    if (data.success) {{
+                        resultBox.className = 'result success';
+                        resultBox.innerHTML = `<strong>Success!</strong> Document formatted. <br><a href="${{data.file_url}}" target="_blank">Download ${{data.filename || 'File'}}</a>`;
+                        
+                        setTimeout(() => window.location.reload(), 2000);
+                    }} else {{
+                        resultBox.className = 'result error';
+                        resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
+                    }}
+                }} catch (err) {{
+                    resultBox.style.display = 'block';
+                    resultBox.className = 'result error';
+                    resultBox.textContent = 'Network error occurred.';
+                }} finally {{
+                    btn.disabled = false;
+                    btn.textContent = 'Format Document';
+                }}
+            }});
         </script>
     </body>
     </html>
@@ -200,6 +255,10 @@ async def api_generate(request: GenerateRequest):
 @app.post("/api/image-to-pptx")
 async def api_image_to_pptx(request: ImageRequest):
     return image_to_presentation(request.image_source, request.is_url)
+
+@app.post("/api/format-docx")
+async def api_format_docx(request: DocxRequest):
+    return format_document(request.doc_source, request.is_url)
 
 @app.get("/downloads/{execution_id}/{filename}")
 async def download_file(execution_id: str, filename: str):

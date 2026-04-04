@@ -7,8 +7,64 @@ import requests
 from io import BytesIO
 from datetime import datetime
 from PIL import Image
+from docx_formatter import apply_guidelines
 from pptx import Presentation
 from pptx.util import Inches
+
+def format_document(doc_source: str, is_url: bool = True) -> dict:
+    """
+    Downloads/Reads a DOCX file, applies corporate guidelines, and returns the formatted DOCX URL.
+    """
+    stats["requests_received"] += 1
+    stats["last_request_time"] = datetime.now().isoformat()
+    
+    execution_id = str(uuid.uuid4())
+    run_dir = os.path.join(OUTPUT_DIR, execution_id)
+    os.makedirs(run_dir, exist_ok=True)
+    
+    input_filename = "input.docx"
+    input_path = os.path.join(run_dir, input_filename)
+    output_filename = "formatted_document.docx"
+    output_path = os.path.join(run_dir, output_filename)
+    
+    try:
+        if is_url:
+            if doc_source.startswith(('http://', 'https://')):
+                response = requests.get(doc_source, verify=False)
+                response.raise_for_status()
+                with open(input_path, 'wb') as f:
+                    f.write(response.content)
+            else:
+                if ";base64," in doc_source:
+                    _, b64_data = doc_source.split(";base64,")
+                    with open(input_path, 'wb') as f:
+                        f.write(base64.b64decode(b64_data))
+                else:
+                    import shutil
+                    shutil.copy2(doc_source, input_path)
+        else:
+            with open(input_path, 'wb') as f:
+                f.write(base64.b64decode(doc_source))
+                
+        # Apply formatting guidelines
+        apply_guidelines(input_path, output_path)
+        
+        file_url = _get_file_url(execution_id, output_filename)
+        stats["successful_creations"] += 1
+        return {
+            "success": True,
+            "message": "Document formatted successfully.",
+            "file_url": file_url,
+            "execution_id": execution_id,
+            "filename": output_filename
+        }
+        
+    except Exception as e:
+        stats["failed_creations"] += 1
+        return {
+            "success": False,
+            "message": f"Error formatting document: {str(e)}"
+        }
 
 # Global stats
 stats = {

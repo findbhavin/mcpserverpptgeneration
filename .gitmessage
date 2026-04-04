@@ -1,0 +1,7 @@
+feat: add image-to-pptx functionality, Web UI, and GCP deployment config
+
+- Implement image_to_pptx endpoint for converting images to presentation slides
+- Add FastAPI application to serve both REST API and MCP protocol endpoints
+- Create Web Dashboard to track stats and manually trigger presentation generation
+- Setup Dockerfile, docker-compose.yml, and cloudbuild.yaml for GCP Cloud Run deployment
+- Update README.md with detailed API documentation and deployment steps
