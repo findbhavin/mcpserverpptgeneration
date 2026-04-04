@@ -1,0 +1,212 @@
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+import os
+import uvicorn
+
+from core import generate_presentation, image_to_presentation, stats, OUTPUT_DIR
+from mcp_server import mcp
+
+app = FastAPI(title="PPTX Generator API", description="API and UI for generating PowerPoint presentations")
+
+# Mount the MCP SSE application
+mcp_starlette = mcp.sse_app()
+app.mount("/mcp", mcp_starlette)
+
+# Pydantic models for API
+class GenerateRequest(BaseModel):
+    python_code: str
+
+class ImageRequest(BaseModel):
+    image_source: str
+    is_url: bool = True
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>PPTX Generator Dashboard</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }}
+            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            h1 {{ color: #333; }}
+            .stats {{ display: flex; gap: 20px; margin-bottom: 30px; }}
+            .stat-box {{ flex: 1; background: #e9ecef; padding: 15px; border-radius: 6px; text-align: center; }}
+            .stat-box h3 {{ margin: 0 0 10px 0; font-size: 14px; color: #666; }}
+            .stat-box p {{ margin: 0; font-size: 24px; font-weight: bold; color: #333; }}
+            textarea {{ width: 100%; height: 200px; margin-bottom: 15px; padding: 10px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }}
+            button {{ background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; }}
+            button:hover {{ background: #0056b3; }}
+            .result {{ margin-top: 20px; padding: 15px; border-radius: 4px; display: none; }}
+            .success {{ background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }}
+            .error {{ background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>PPTX Generator Dashboard</h1>
+            
+            <div class="stats">
+                <div class="stat-box">
+                    <h3>Requests Received</h3>
+                    <p>{stats['requests_received']}</p>
+                </div>
+                <div class="stat-box">
+                    <h3>Successful Creations</h3>
+                    <p>{stats['successful_creations']}</p>
+                </div>
+                <div class="stat-box">
+                    <h3>Failed Creations</h3>
+                    <p>{stats['failed_creations']}</p>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 20px; margin-bottom: 20px;">
+                <button id="tabCode" style="flex: 1; background: #007bff;" onclick="switchTab('code')">Generate from Code</button>
+                <button id="tabImage" style="flex: 1; background: #6c757d;" onclick="switchTab('image')">Convert Image to PPTX</button>
+            </div>
+
+            <div id="sectionCode">
+                <h2>Trigger Presentation Creation</h2>
+                <form id="generateForm">
+                    <textarea id="pythonCode" placeholder="Enter python-pptx code here... Example:
+from pptx import Presentation
+prs = Presentation()
+slide = prs.slides.add_slide(prs.slide_layouts[0])
+slide.shapes.title.text = 'Hello World'
+prs.save('output.pptx')"></textarea>
+                    <button type="submit" id="submitBtn">Generate PPTX</button>
+                </form>
+            </div>
+
+            <div id="sectionImage" style="display: none;">
+                <h2>Convert Image to PPTX</h2>
+                <form id="imageForm">
+                    <input type="text" id="imageSource" placeholder="Enter Image URL or Data URI..." style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" required>
+                    <button type="submit" id="submitImageBtn">Convert to PPTX</button>
+                </form>
+            </div>
+
+            <div id="resultBox" class="result"></div>
+        </div>
+
+        <script>
+            function switchTab(tab) {{
+                document.getElementById('sectionCode').style.display = tab === 'code' ? 'block' : 'none';
+                document.getElementById('sectionImage').style.display = tab === 'image' ? 'block' : 'none';
+                document.getElementById('tabCode').style.background = tab === 'code' ? '#007bff' : '#6c757d';
+                document.getElementById('tabImage').style.background = tab === 'image' ? '#007bff' : '#6c757d';
+                document.getElementById('resultBox').style.display = 'none';
+            }}
+
+            document.getElementById('generateForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                const btn = document.getElementById('submitBtn');
+                const resultBox = document.getElementById('resultBox');
+                const code = document.getElementById('pythonCode').value;
+                
+                if (!code) return;
+                
+                btn.disabled = true;
+                btn.textContent = 'Generating...';
+                resultBox.style.display = 'none';
+                
+                try {{
+                    const response = await fetch('/api/generate', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ python_code: code }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    resultBox.style.display = 'block';
+                    if (data.success) {{
+                        resultBox.className = 'result success';
+                        resultBox.innerHTML = `<strong>Success!</strong> Presentation generated. <br><a href="${{data.file_url}}" target="_blank">Download ${{data.filename || 'File'}}</a>`;
+                        
+                        setTimeout(() => window.location.reload(), 2000);
+                    }} else {{
+                        resultBox.className = 'result error';
+                        resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
+                    }}
+                }} catch (err) {{
+                    resultBox.style.display = 'block';
+                    resultBox.className = 'result error';
+                    resultBox.textContent = 'Network error occurred.';
+                }} finally {{
+                    btn.disabled = false;
+                    btn.textContent = 'Generate PPTX';
+                }}
+            }});
+
+            document.getElementById('imageForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                const btn = document.getElementById('submitImageBtn');
+                const resultBox = document.getElementById('resultBox');
+                const source = document.getElementById('imageSource').value;
+                
+                if (!source) return;
+                
+                btn.disabled = true;
+                btn.textContent = 'Converting...';
+                resultBox.style.display = 'none';
+                
+                try {{
+                    const response = await fetch('/api/image-to-pptx', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ image_source: source, is_url: true }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    resultBox.style.display = 'block';
+                    if (data.success) {{
+                        resultBox.className = 'result success';
+                        resultBox.innerHTML = `<strong>Success!</strong> Presentation generated. <br><a href="${{data.file_url}}" target="_blank">Download ${{data.filename || 'File'}}</a>`;
+                        
+                        setTimeout(() => window.location.reload(), 2000);
+                    }} else {{
+                        resultBox.className = 'result error';
+                        resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
+                    }}
+                }} catch (err) {{
+                    resultBox.style.display = 'block';
+                    resultBox.className = 'result error';
+                    resultBox.textContent = 'Network error occurred.';
+                }} finally {{
+                    btn.disabled = false;
+                    btn.textContent = 'Convert to PPTX';
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+@app.get("/api/stats")
+async def get_stats():
+    return stats
+
+@app.post("/api/generate")
+async def api_generate(request: GenerateRequest):
+    return generate_presentation(request.python_code)
+
+@app.post("/api/image-to-pptx")
+async def api_image_to_pptx(request: ImageRequest):
+    return image_to_presentation(request.image_source, request.is_url)
+
+@app.get("/downloads/{execution_id}/{filename}")
+async def download_file(execution_id: str, filename: str):
+    file_path = os.path.join(OUTPUT_DIR, execution_id, filename)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, filename=filename)
+    return {"error": "File not found"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
