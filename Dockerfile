@@ -14,7 +14,7 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the server code
-COPY core.py mcp_server.py app.py /app/
+COPY core.py mcp_server.py app.py docx_formatter.py /app/
 
 # Give ownership to the non-root user
 RUN chown -R mcpuser:mcpuser /app
