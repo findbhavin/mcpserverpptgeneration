@@ -65,7 +65,7 @@ def format_document(doc_source: str, is_url: bool = True, webhook_url: str = Non
         apply_guidelines(input_path, output_path)
         
         file_url = _get_file_url(execution_id, output_filename)
-        stats["successful_creations"] += 1
+        _record_success(file_url, output_filename)
         return {
             "success": True,
             "message": "Document formatted successfully.",
@@ -291,7 +291,9 @@ stats = {
     "requests_received": 0,
     "successful_creations": 0,
     "failed_creations": 0,
-    "last_request_time": None
+    "last_request_time": None,
+    "last_success_file_url": None,
+    "last_success_filename": None
 }
 
 # Global history for last X generated artifacts
