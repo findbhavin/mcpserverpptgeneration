@@ -212,6 +212,8 @@ def process_pdf_to_artifacts(
             
         file_url = _get_file_url(execution_id, output_filename)
         stats["successful_creations"] += 1
+        _add_to_history(execution_id, output_filename, file_url, "process_pdf")
+        
         response_payload = {
             "success": True,
             "message": f"Successfully generated {target_format.upper()} from PDF.",
@@ -292,6 +294,25 @@ stats = {
     "last_request_time": None
 }
 
+# Global history for last X generated artifacts
+MAX_HISTORY_ITEMS = int(os.environ.get("MAX_HISTORY_ITEMS", "10"))
+generation_history = []
+
+def _add_to_history(execution_id: str, filename: str, file_url: str, artifact_type: str):
+    """Add a successful generation to the history list."""
+    history_item = {
+        "execution_id": execution_id,
+        "filename": filename,
+        "file_url": file_url,
+        "type": artifact_type,
+        "timestamp": datetime.now().isoformat()
+    }
+    generation_history.insert(0, history_item) # Add to front (newest first)
+    
+    # Keep only the last X items
+    while len(generation_history) > MAX_HISTORY_ITEMS:
+        generation_history.pop()
+
 OUTPUT_DIR = os.environ.get("PPTX_OUTPUT_DIR", tempfile.gettempdir())
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -355,6 +376,8 @@ def generate_presentation(python_code: str, webhook_url: str = None) -> dict:
         file_url = _get_file_url(execution_id, pptx_files[0])
             
         stats["successful_creations"] += 1
+        _add_to_history(execution_id, pptx_files[0], file_url, "generate_pptx")
+        
         response_payload = {
             "success": True,
             "message": "Presentation generated successfully.",
@@ -456,6 +479,8 @@ def image_to_presentation(image_source: str, is_url: bool = True, webhook_url: s
         file_url = _get_file_url(execution_id, output_filename)
         
         stats["successful_creations"] += 1
+        _add_to_history(execution_id, output_filename, file_url, "image_to_pptx")
+        
         response_payload = {
             "success": True,
             "message": "Image presentation generated successfully.",

@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 import uvicorn
 
-from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, stats, OUTPUT_DIR
+from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, stats, generation_history, OUTPUT_DIR
 from mcp_server import mcp
 
 app = FastAPI(title="PPTX Generator API", description="API and UI for generating PowerPoint presentations")
@@ -73,6 +73,11 @@ async def index():
             .result {{ margin-top: 20px; padding: 15px; border-radius: 4px; display: none; }}
             .success {{ background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }}
             .error {{ background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }}
+            .history-list {{ list-style-type: none; padding: 0; }}
+            .history-list li {{ background: #f8f9fa; margin-bottom: 10px; padding: 15px; border-radius: 6px; border-left: 4px solid #007bff; display: flex; justify-content: space-between; align-items: center; }}
+            .history-list li a {{ color: #007bff; text-decoration: none; font-weight: bold; }}
+            .history-list li a:hover {{ text-decoration: underline; }}
+            .history-meta {{ font-size: 12px; color: #6c757d; }}
         </style>
     </head>
     <body>
@@ -186,9 +191,50 @@ prs.save('output.pptx')"></textarea>
             </div>
 
             <div id="resultBox" class="result"></div>
+            
+            <hr style="margin: 40px 0; border: 0; border-top: 1px solid #eee;">
+            
+            <h2>Recent Generations</h2>
+            <div id="historyContainer">
+                <p style="color: #666; font-style: italic;">Loading history...</p>
+            </div>
         </div>
 
         <script>
+            function loadHistory() {{
+                fetch('/api/history')
+                    .then(response => response.json())
+                    .then(data => {{
+                        const container = document.getElementById('historyContainer');
+                        if (!data || data.length === 0) {{
+                            container.innerHTML = '<p style="color: #666; font-style: italic;">No recent generations found.</p>';
+                            return;
+                        }}
+                        
+                        let html = '<ul class="history-list">';
+                        data.forEach(item => {{
+                            const date = new Date(item.timestamp).toLocaleString();
+                            html += `
+                                <li>
+                                    <div>
+                                        <a href="${{item.file_url}}" target="_blank" download>${{item.filename}}</a>
+                                        <div class="history-meta">ID: ${{item.execution_id}} | Type: ${{item.type}}</div>
+                                    </div>
+                                    <div style="font-size: 12px; color: #999;">${{date}}</div>
+                                </li>
+                            `;
+                        }});
+                        html += '</ul>';
+                        container.innerHTML = html;
+                    }})
+                    .catch(err => {{
+                        console.error('Error loading history:', err);
+                        document.getElementById('historyContainer').innerHTML = '<p style="color: red;">Failed to load history.</p>';
+                    }});
+            }}
+
+            document.addEventListener('DOMContentLoaded', loadHistory);
+
             function fileToBase64(file) {{
                 return new Promise((resolve, reject) => {{
                     const reader = new FileReader();
@@ -503,6 +549,10 @@ prs.save('output.pptx')"></textarea>
 @app.get("/api/stats")
 async def get_stats():
     return stats
+
+@app.get("/api/history")
+async def get_history():
+    return generation_history
 
 @app.post("/api/generate")
 async def api_generate(request: GenerateRequest):

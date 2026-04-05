@@ -1,7 +1,7 @@
-feat: add webhook support and improve MCP communication
+feat: add history of generated documents with UI downloads
 
-- Added `webhook_url` parameter to MCP tools and REST API endpoints
-- Improved MCP Tool descriptions to explicitly state JSON return structures, improving AI Agent communication during generation
-- Added asynchronous `requests.post()` in core logic to trigger webhook pushing when processing is complete
-- Allowed `app.py` payload classes and endpoints to accept and pass the webhook_url field
-- Merged with previous file upload UI changes seamlessly
+- Added generation history feature to track the last X documents
+- Maintained a configurable `MAX_HISTORY_ITEMS` defaulting to 10
+- Updated `core.py` logic to seamlessly trace outputs and timestamps
+- Updated `app.py` UI Dashboard to beautifully render the History List
+- Allows UI users to natively click and download their historically generated files
