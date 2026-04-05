@@ -14,12 +14,19 @@ import fitz  # PyMuPDF
 from docx import Document as DocxDocument
 from docx_formatter import apply_guidelines
 
-def _record_success(file_url: str, filename: str) -> None:
-    stats["successful_creations"] += 1
-    stats["last_success_file_url"] = file_url
-    stats["last_success_filename"] = filename
+def _trigger_webhook(webhook_url: str, payload: dict):
+    """
+    Push the generated artifact info to the specified webhook URL.
+    """
+    if not webhook_url:
+        return
+    try:
+        # Avoid hanging the generation response by using a short timeout for webhook
+        requests.post(webhook_url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Failed to trigger webhook at {webhook_url}: {e}")
 
-def format_document(doc_source: str, is_url: bool = True) -> dict:
+def format_document(doc_source: str, is_url: bool = True, webhook_url: str = None) -> dict:
     """
     Downloads/Reads a DOCX file, applies corporate guidelines, and returns the formatted DOCX URL.
     """
@@ -81,7 +88,8 @@ def process_pdf_to_artifacts(
     layout_theme: str = "", 
     visual_iconography: str = "", 
     slide_content_rules: str = "",
-    target_format: str = "pptx"
+    target_format: str = "pptx",
+    webhook_url: str = None
 ) -> dict:
     """
     Converts a PDF into a PPTX or DOCX, incorporating custom guidelines.
@@ -203,21 +211,25 @@ def process_pdf_to_artifacts(
             doc.close()
             
         file_url = _get_file_url(execution_id, output_filename)
-        _record_success(file_url, output_filename)
-        return {
+        stats["successful_creations"] += 1
+        response_payload = {
             "success": True,
             "message": f"Successfully generated {target_format.upper()} from PDF.",
             "file_url": file_url,
             "execution_id": execution_id,
             "filename": output_filename
         }
+        _trigger_webhook(webhook_url, response_payload)
+        return response_payload
         
     except Exception as e:
         stats["failed_creations"] += 1
-        return {
+        error_payload = {
             "success": False,
             "message": f"Error converting PDF: {str(e)}"
         }
+        _trigger_webhook(webhook_url, error_payload)
+        return error_payload
     """
     Downloads/Reads a DOCX file, applies corporate guidelines, and returns the formatted DOCX URL.
     """
@@ -300,7 +312,7 @@ def _get_file_url(execution_id: str, filename: str) -> str:
         prefix = base_url.rstrip('/') if base_url else ""
         return f"{prefix}/downloads/{execution_id}/{filename}"
 
-def generate_presentation(python_code: str) -> dict:
+def generate_presentation(python_code: str, webhook_url: str = None) -> dict:
     """
     Executes Python code to generate a PPTX file.
     Returns a dict with 'success', 'message', and optionally 'file_url' or 'execution_id'.
@@ -344,29 +356,35 @@ def generate_presentation(python_code: str) -> dict:
             
         file_url = _get_file_url(execution_id, pptx_files[0])
             
-        _record_success(file_url, pptx_files[0])
-        return {
+        stats["successful_creations"] += 1
+        response_payload = {
             "success": True,
             "message": "Presentation generated successfully.",
             "file_url": file_url,
             "execution_id": execution_id,
             "filename": pptx_files[0]
         }
+        _trigger_webhook(webhook_url, response_payload)
+        return response_payload
         
     except subprocess.TimeoutExpired:
         stats["failed_creations"] += 1
-        return {
+        error_payload = {
             "success": False,
             "message": "Error: Python code execution timed out after 60 seconds."
         }
+        _trigger_webhook(webhook_url, error_payload)
+        return error_payload
     except Exception as e:
         stats["failed_creations"] += 1
-        return {
+        error_payload = {
             "success": False,
             "message": f"Error: {str(e)}"
         }
+        _trigger_webhook(webhook_url, error_payload)
+        return error_payload
 
-def image_to_presentation(image_source: str, is_url: bool = True) -> dict:
+def image_to_presentation(image_source: str, is_url: bool = True, webhook_url: str = None) -> dict:
     """
     Converts an image into a PPTX presentation with a single slide containing the image perfectly fitted.
     image_source: URL, file path, or base64 string.
@@ -439,18 +457,22 @@ def image_to_presentation(image_source: str, is_url: bool = True) -> dict:
         
         file_url = _get_file_url(execution_id, output_filename)
         
-        _record_success(file_url, output_filename)
-        return {
+        stats["successful_creations"] += 1
+        response_payload = {
             "success": True,
             "message": "Image presentation generated successfully.",
             "file_url": file_url,
             "execution_id": execution_id,
             "filename": output_filename
         }
+        _trigger_webhook(webhook_url, response_payload)
+        return response_payload
         
     except Exception as e:
         stats["failed_creations"] += 1
-        return {
+        error_payload = {
             "success": False,
             "message": f"Error converting image to presentation: {str(e)}"
         }
+        _trigger_webhook(webhook_url, error_payload)
+        return error_payload

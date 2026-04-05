@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+import base64
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
@@ -20,14 +21,17 @@ app.mount("/mcp", mcp_starlette)
 # Pydantic models for API
 class GenerateRequest(BaseModel):
     python_code: str
+    webhook_url: str = None
 
 class ImageRequest(BaseModel):
     image_source: str
     is_url: bool = True
+    webhook_url: str = None
 
 class DocxRequest(BaseModel):
     doc_source: str
     is_url: bool = True
+    webhook_url: str = None
 
 class PdfRequest(BaseModel):
     pdf_source: str
@@ -37,6 +41,16 @@ class PdfRequest(BaseModel):
     visual_iconography: str = ""
     slide_content_rules: str = ""
     target_format: str = "pptx"
+    webhook_url: str = None
+
+
+def _persist_upload_to_tempfile(upload: UploadFile, suffix: str) -> str:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        shutil.copyfileobj(upload.file, temp_file)
+    finally:
+        temp_file.close()
+    return temp_file.name
 
 
 def _persist_upload_to_tempfile(upload: UploadFile, suffix: str) -> str:
@@ -118,7 +132,13 @@ prs.save('output.pptx')"></textarea>
             <div id="sectionImage" style="display: none;">
                 <h2>Convert Image to PPTX</h2>
                 <form id="imageForm">
-                    <input type="text" id="imageSource" placeholder="Enter Image URL or Data URI..." style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" required>
+                    <div style="margin-bottom: 15px;">
+                        <label><strong>Option 1: Upload Image</strong></label>
+                        <input type="file" id="imageFileInput" accept="image/*" style="display: block; margin-top: 5px;">
+                    </div>
+                    <div style="text-align: center; margin-bottom: 15px;">OR</div>
+                    <label><strong>Option 2: Provide URL</strong></label>
+                    <input type="text" id="imageSource" placeholder="Enter Image URL..." style="width: 100%; padding: 10px; margin-top: 5px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                     <button type="submit" id="submitImageBtn">Convert to PPTX</button>
                 </form>
             </div>
@@ -126,7 +146,13 @@ prs.save('output.pptx')"></textarea>
             <div id="sectionDocx" style="display: none;">
                 <h2>Format Document (Apply Template)</h2>
                 <form id="docxForm">
-                    <input type="text" id="docxSource" placeholder="Enter DOCX File URL or Base64..." style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" required>
+                    <div style="margin-bottom: 15px;">
+                        <label><strong>Option 1: Upload DOCX</strong></label>
+                        <input type="file" id="docxFileInput" accept=".docx" style="display: block; margin-top: 5px;">
+                    </div>
+                    <div style="text-align: center; margin-bottom: 15px;">OR</div>
+                    <label><strong>Option 2: Provide URL</strong></label>
+                    <input type="text" id="docxSource" placeholder="Enter DOCX File URL..." style="width: 100%; padding: 10px; margin-top: 5px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                     <button type="submit" id="submitDocxBtn">Format Document</button>
                 </form>
                 <div style="margin: 12px 0; text-align: center; color: #666;">or</div>
@@ -139,7 +165,13 @@ prs.save('output.pptx')"></textarea>
             <div id="sectionPdf" style="display: none;">
                 <h2>Process PDF to Presentation/Document</h2>
                 <form id="pdfForm">
-                    <input type="text" id="pdfSource" placeholder="Enter PDF File URL or Base64..." style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" required>
+                    <div style="margin-bottom: 15px;">
+                        <label><strong>Option 1: Upload PDF</strong></label>
+                        <input type="file" id="pdfFileInput" accept=".pdf" style="display: block; margin-top: 5px;">
+                    </div>
+                    <div style="text-align: center; margin-bottom: 15px;">OR</div>
+                    <label><strong>Option 2: Provide URL</strong></label>
+                    <input type="text" id="pdfSource" placeholder="Enter PDF File URL..." style="width: 100%; padding: 10px; margin-top: 5px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                     
                     <textarea id="pdfInstructions" placeholder="Abstract Instructions (e.g., 'Extract financial tables only')..." style="height: 60px;"></textarea>
                     <input type="text" id="pdfLayoutTheme" placeholder="Layout Theme (e.g., 'Modern Corporate')" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
@@ -172,6 +204,15 @@ prs.save('output.pptx')"></textarea>
         </div>
 
         <script>
+            function fileToBase64(file) {{
+                return new Promise((resolve, reject) => {{
+                    const reader = new FileReader();
+                    reader.readAsDataURL(file);
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = error => reject(error);
+                }});
+            }}
+
             function switchTab(tab) {{
                 document.getElementById('sectionCode').style.display = tab === 'code' ? 'block' : 'none';
                 document.getElementById('sectionImage').style.display = tab === 'image' ? 'block' : 'none';
@@ -229,9 +270,19 @@ prs.save('output.pptx')"></textarea>
                 e.preventDefault();
                 const btn = document.getElementById('submitImageBtn');
                 const resultBox = document.getElementById('resultBox');
-                const source = document.getElementById('imageSource').value;
+                const fileInput = document.getElementById('imageFileInput');
+                let source = document.getElementById('imageSource').value;
+                let is_url = true;
+
+                if (fileInput.files.length > 0) {{
+                    source = await fileToBase64(fileInput.files[0]);
+                    is_url = true; // The backend naturally handles data URIs when is_url is true
+                }}
                 
-                if (!source) return;
+                if (!source) {{
+                    alert("Please provide an image file or URL.");
+                    return;
+                }}
                 
                 btn.disabled = true;
                 btn.textContent = 'Converting...';
@@ -269,9 +320,18 @@ prs.save('output.pptx')"></textarea>
                 e.preventDefault();
                 const btn = document.getElementById('submitDocxBtn');
                 const resultBox = document.getElementById('resultBox');
-                const source = document.getElementById('docxSource').value;
+                const fileInput = document.getElementById('docxFileInput');
+                let source = document.getElementById('docxSource').value;
+                let is_url = true;
+
+                if (fileInput.files.length > 0) {{
+                    source = await fileToBase64(fileInput.files[0]);
+                }}
                 
-                if (!source) return;
+                if (!source) {{
+                    alert("Please provide a DOCX file or URL.");
+                    return;
+                }}
                 
                 btn.disabled = true;
                 btn.textContent = 'Formatting...';
@@ -348,14 +408,22 @@ prs.save('output.pptx')"></textarea>
                 const btn = document.getElementById('submitPdfBtn');
                 const resultBox = document.getElementById('resultBox');
                 
-                const source = document.getElementById('pdfSource').value;
+                const fileInput = document.getElementById('pdfFileInput');
+                let source = document.getElementById('pdfSource').value;
                 const instructions = document.getElementById('pdfInstructions').value;
                 const theme = document.getElementById('pdfLayoutTheme').value;
                 const iconography = document.getElementById('pdfIconography').value;
                 const rules = document.getElementById('pdfContentRules').value;
                 const format = document.getElementById('pdfTargetFormat').value;
                 
-                if (!source) return;
+                if (fileInput.files.length > 0) {{
+                    source = await fileToBase64(fileInput.files[0]);
+                }}
+                
+                if (!source) {{
+                    alert("Please provide a PDF file or URL.");
+                    return;
+                }}
                 
                 btn.disabled = true;
                 btn.textContent = 'Processing...';
@@ -453,15 +521,28 @@ async def get_stats():
 
 @app.post("/api/generate")
 async def api_generate(request: GenerateRequest):
-    return generate_presentation(request.python_code)
+    return generate_presentation(request.python_code, request.webhook_url)
 
 @app.post("/api/image-to-pptx")
 async def api_image_to_pptx(request: ImageRequest):
-    return image_to_presentation(request.image_source, request.is_url)
+    return image_to_presentation(request.image_source, request.is_url, request.webhook_url)
 
 @app.post("/api/format-docx")
 async def api_format_docx(request: DocxRequest):
-    return format_document(request.doc_source, request.is_url)
+    return format_document(request.doc_source, request.is_url, request.webhook_url)
+
+@app.post("/api/format-docx-upload")
+async def api_format_docx_upload(docx_file: UploadFile = File(...), webhook_url: str = Form(None)):
+    if not docx_file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Only .docx files are supported.")
+    if docx_file.size and docx_file.size > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large for this deployment.")
+    temp_path = _persist_upload_to_tempfile(docx_file, ".docx")
+    try:
+        return format_document(temp_path, is_url=True, webhook_url=webhook_url)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 @app.post("/api/format-docx-upload")
 async def api_format_docx_upload(docx_file: UploadFile = File(...)):
@@ -485,7 +566,8 @@ async def api_process_pdf(request: PdfRequest):
         request.layout_theme, 
         request.visual_iconography, 
         request.slide_content_rules, 
-        request.target_format
+        request.target_format,
+        request.webhook_url
     )
 
 @app.post("/api/process-pdf-upload")
@@ -495,7 +577,8 @@ async def api_process_pdf_upload(
     layout_theme: str = Form(""),
     visual_iconography: str = Form(""),
     slide_content_rules: str = Form(""),
-    target_format: str = Form("pptx")
+    target_format: str = Form("pptx"),
+    webhook_url: str = Form(None)
 ):
     if not pdf_file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
@@ -512,7 +595,8 @@ async def api_process_pdf_upload(
             layout_theme,
             visual_iconography,
             slide_content_rules,
-            target_format
+            target_format,
+            webhook_url
         )
     finally:
         if os.path.exists(temp_path):
