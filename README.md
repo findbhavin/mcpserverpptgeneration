@@ -87,7 +87,8 @@ Converts an image into a presentation with a single slide perfectly fitting the 
 *(You can also pass a base64 string directly with `is_url: false` or a base64 data URI with `is_url: true`)*
 
 ### `POST /api/process-pdf`
-Processes a fresh PDF file (or Base64 content) and converts it into a `pptx` or `docx` format, optionally taking into account instructions around layout themes, visual iconography, and slide content rules.
+Processes a fresh PDF file (or Base64 content) and converts it into a `pptx` or `docx` format.
+If `target_format` is `pptx`, and `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) is set, the server uses AI to **re-hash full images to editable slide content**. It understands the slide content in detail, converts them into editable slides with Aptos Narrow font, applies consistent title sizes, AI-generated visual iconography (via DiceBear API), and generates an overarching punchline for each slide. The layout automatically adapts based on the intent of the slide (e.g., Title and Content, Two Column). If the API key is not present, it will fallback to generating full-page images per slide.
 
 **Request body:**
 ```json

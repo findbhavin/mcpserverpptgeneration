@@ -4,15 +4,54 @@ import tempfile
 import subprocess
 import base64
 import requests
+import json
 from io import BytesIO
 from datetime import datetime
 from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
+from pptx.dml.color import RGBColor
 import fitz  # PyMuPDF
 from docx import Document as DocxDocument
 from docx_formatter import apply_guidelines
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
+import urllib3
+urllib3.disable_warnings()
+
+class SlideData(BaseModel):
+    title: str = Field(description="The main title for the slide")
+    punchline: str = Field(description="A catchy subtitle or narrative summary")
+    layout_type: str = Field(description="One of: title_and_content, two_column, diagram")
+    bullet_points: list[str] = Field(description="The main content points extracted and summarized")
+    icon_keyword: str = Field(description="A single keyword to search for an icon representing the slide's intent")
+
+def _apply_aptos_narrow(shape):
+    if not hasattr(shape, 'text_frame'):
+        return
+    for paragraph in shape.text_frame.paragraphs:
+        for run in paragraph.runs:
+            run.font.name = 'Aptos Narrow'
+
+def _fit_image_to_slide(slide, img_path, slide_width, slide_height, margin):
+    img = Image.open(img_path)
+    img_width, img_height = img.size
+    page_aspect = img_width / img_height
+    slide_aspect = (slide_width - 2 * margin) / (slide_height - 2 * margin)
+    
+    if page_aspect > slide_aspect:
+        width = slide_width - 2 * margin
+        height = width / page_aspect
+    else:
+        height = slide_height - 2 * margin
+        width = height * page_aspect
+        
+    left = (slide_width - width) / 2 + margin
+    top = (slide_height - height) / 2 + margin
+    
+    slide.shapes.add_picture(img_path, left, top, width, height)
 
 def _trigger_webhook(webhook_url: str, payload: dict):
     """
@@ -147,6 +186,13 @@ def process_pdf_to_artifacts(
                     
                 blank_layout = prs.slide_layouts[6]
                 
+                has_genai = os.environ.get("GEMINI_API_KEY") is not None or os.environ.get("GOOGLE_API_KEY") is not None
+                if has_genai:
+                    try:
+                        client = genai.Client()
+                    except:
+                        has_genai = False
+                
                 for page_num in range(len(doc)):
                     page = doc[page_num]
                     # 1.5x offers a better memory/performance balance for Cloud Run
@@ -156,24 +202,91 @@ def process_pdf_to_artifacts(
                     img_path = os.path.join(run_dir, f"page_{page_num}.png")
                     pix.save(img_path)
                     
-                    slide = prs.slides.add_slide(blank_layout)
-                    
-                    img_width = pix.width
-                    img_height = pix.height
-                    page_aspect = img_width / img_height
-                    slide_aspect = (SLIDE_WIDTH - 2 * MARGIN) / (SLIDE_HEIGHT - 2 * MARGIN)
-                    
-                    if page_aspect > slide_aspect:
-                        width = SLIDE_WIDTH - 2 * MARGIN
-                        height = width / page_aspect
+                    if has_genai:
+                        try:
+                            pil_img = Image.open(img_path)
+                            prompt_text = f"""Analyze this presentation slide image. 
+                            Extract its content and structure it. 
+                            Suggest a new layout type (choose from: title_and_content, two_column, diagram), 
+                            an overarching punchline, and a keyword for a visual icon that represents the core idea.
+                            User Instructions: {instructions}
+                            Layout Theme: {layout_theme}
+                            Content Rules: {slide_content_rules}"""
+                            
+                            response = client.models.generate_content(
+                                model='gemini-2.5-flash',
+                                contents=[pil_img, prompt_text],
+                                config=types.GenerateContentConfig(
+                                    response_mime_type="application/json",
+                                    response_schema=SlideData,
+                                    temperature=0.2
+                                ),
+                            )
+                            slide_data = json.loads(response.text)
+                            
+                            # Build editable slide
+                            l_type = slide_data.get('layout_type', 'title_and_content')
+                            if l_type == 'two_column':
+                                slide_layout = prs.slide_layouts[3] # Two Content
+                            else:
+                                slide_layout = prs.slide_layouts[1] # Title and Content
+                                
+                            slide = prs.slides.add_slide(slide_layout)
+                            
+                            # Set Title
+                            title_shape = slide.shapes.title
+                            title_shape.text = slide_data.get('title', f"Slide {page_num + 1}")
+                            _apply_aptos_narrow(title_shape)
+                            
+                            # Set Subtitle / Punchline
+                            left = Inches(0.5)
+                            top = Inches(1.2)
+                            width = Inches(8.0)
+                            height = Inches(0.5)
+                            txBox = slide.shapes.add_textbox(left, top, width, height)
+                            tf = txBox.text_frame
+                            p = tf.add_paragraph()
+                            p.text = slide_data.get('punchline', '')
+                            p.font.italic = True
+                            p.font.color.rgb = RGBColor(100, 100, 100)
+                            _apply_aptos_narrow(txBox)
+                            
+                            # Set Bullets
+                            body_shape = slide.placeholders[1]
+                            tf = body_shape.text_frame
+                            tf.text = "" # clear default
+                            for bullet in slide_data.get('bullet_points', []):
+                                p = tf.add_paragraph()
+                                p.text = bullet
+                                p.level = 0
+                            _apply_aptos_narrow(body_shape)
+                            
+                            # Add AI Generated Icon
+                            icon_keyword = slide_data.get('icon_keyword', 'presentation')
+                            icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}"
+                            try:
+                                icon_resp = requests.get(icon_url, verify=False, timeout=10)
+                                if icon_resp.status_code == 200:
+                                    icon_path = os.path.join(run_dir, f"icon_{page_num}.png")
+                                    with open(icon_path, "wb") as f:
+                                        f.write(icon_resp.content)
+                                    slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
+                            except:
+                                pass
+                                
+                            if l_type == 'two_column' and len(slide.placeholders) > 2:
+                                right_body_shape = slide.placeholders[2]
+                                tf_right = right_body_shape.text_frame
+                                tf_right.text = "Visual Placeholder or Additional Info"
+                                _apply_aptos_narrow(right_body_shape)
+                        except Exception as e:
+                            print(f"GenAI failed for page {page_num}: {e}")
+                            slide = prs.slides.add_slide(blank_layout)
+                            _fit_image_to_slide(slide, img_path, SLIDE_WIDTH, SLIDE_HEIGHT, MARGIN)
                     else:
-                        height = SLIDE_HEIGHT - 2 * MARGIN
-                        width = height * page_aspect
+                        slide = prs.slides.add_slide(blank_layout)
+                        _fit_image_to_slide(slide, img_path, SLIDE_WIDTH, SLIDE_HEIGHT, MARGIN)
                         
-                    left = (SLIDE_WIDTH - width) / 2 + MARGIN
-                    top = (SLIDE_HEIGHT - height) / 2 + MARGIN
-                    
-                    slide.shapes.add_picture(img_path, left, top, width, height)
                     os.remove(img_path)
                     
                 prs.save(output_path)
@@ -270,21 +383,28 @@ def process_pdf_to_artifacts(
         apply_guidelines(input_path, output_path)
         
         file_url = _get_file_url(execution_id, output_filename)
+        
         stats["successful_creations"] += 1
-        return {
+        _add_to_history(execution_id, output_filename, file_url, "format_docx")
+        
+        response_payload = {
             "success": True,
             "message": "Document formatted successfully.",
             "file_url": file_url,
             "execution_id": execution_id,
             "filename": output_filename
         }
+        _trigger_webhook(webhook_url, response_payload)
+        return response_payload
         
     except Exception as e:
         stats["failed_creations"] += 1
-        return {
+        error_payload = {
             "success": False,
             "message": f"Error formatting document: {str(e)}"
         }
+        _trigger_webhook(webhook_url, error_payload)
+        return error_payload
 
 # Global stats
 stats = {
