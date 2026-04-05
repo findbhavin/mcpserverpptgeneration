@@ -47,7 +47,7 @@ Or deploying manually:
 gcloud run deploy pptx-generator \
   --source . \
   --allow-unauthenticated \
-  --memory 1Gi \
+  --memory 2Gi \
   --region us-central1
 ```
 

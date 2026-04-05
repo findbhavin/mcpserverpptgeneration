@@ -22,7 +22,7 @@ steps:
       - 'managed'
       - '--allow-unauthenticated'
       - '--memory'
-      - '1Gi'
+      - '2Gi'
 
 images:
   - 'gcr.io/$PROJECT_ID/pptx-generator'

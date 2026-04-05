@@ -14,6 +14,11 @@ import fitz  # PyMuPDF
 from docx import Document as DocxDocument
 from docx_formatter import apply_guidelines
 
+def _record_success(file_url: str, filename: str) -> None:
+    stats["successful_creations"] += 1
+    stats["last_success_file_url"] = file_url
+    stats["last_success_filename"] = filename
+
 def format_document(doc_source: str, is_url: bool = True) -> dict:
     """
     Downloads/Reads a DOCX file, applies corporate guidelines, and returns the formatted DOCX URL.
@@ -53,7 +58,7 @@ def format_document(doc_source: str, is_url: bool = True) -> dict:
         apply_guidelines(input_path, output_path)
         
         file_url = _get_file_url(execution_id, output_filename)
-        stats["successful_creations"] += 1
+        _record_success(file_url, output_filename)
         return {
             "success": True,
             "message": "Document formatted successfully.",
@@ -112,92 +117,93 @@ def process_pdf_to_artifacts(
                 f.write(base64.b64decode(pdf_source))
                 
         doc = fitz.open(input_path)
-        
-        if target_format.lower() == "pptx":
-            output_filename = "converted_presentation.pptx"
-            output_path = os.path.join(run_dir, output_filename)
-            
-            prs = Presentation()
-            prs.slide_width = SLIDE_WIDTH
-            prs.slide_height = SLIDE_HEIGHT
-            
-            # Add an instructions slide to pass metadata or indicate rules
-            if instructions or layout_theme or visual_iconography or slide_content_rules:
-                slide = prs.slides.add_slide(prs.slide_layouts[1]) # Title and Content
-                slide.shapes.title.text = "Generated PPTX Guidelines applied"
-                tf = slide.placeholders[1].text_frame
-                tf.text = "The following guidelines were requested for this presentation:\n"
-                if layout_theme: tf.add_paragraph().text = f"- Theme: {layout_theme}"
-                if visual_iconography: tf.add_paragraph().text = f"- Iconography: {visual_iconography}"
-                if slide_content_rules: tf.add_paragraph().text = f"- Content Rules: {slide_content_rules}"
-                if instructions: tf.add_paragraph().text = f"- Instructions: {instructions}"
+        try:
+            if target_format.lower() == "pptx":
+                output_filename = "converted_presentation.pptx"
+                output_path = os.path.join(run_dir, output_filename)
                 
-            blank_layout = prs.slide_layouts[6]
-            
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                mat = fitz.Matrix(2.0, 2.0)
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                img_path = os.path.join(run_dir, f"page_{page_num}.png")
-                pix.save(img_path)
+                prs = Presentation()
+                prs.slide_width = SLIDE_WIDTH
+                prs.slide_height = SLIDE_HEIGHT
                 
-                slide = prs.slides.add_slide(blank_layout)
-                
-                img_width = pix.width
-                img_height = pix.height
-                page_aspect = img_width / img_height
-                slide_aspect = (SLIDE_WIDTH - 2 * MARGIN) / (SLIDE_HEIGHT - 2 * MARGIN)
-                
-                if page_aspect > slide_aspect:
-                    width = SLIDE_WIDTH - 2 * MARGIN
-                    height = width / page_aspect
-                else:
-                    height = SLIDE_HEIGHT - 2 * MARGIN
-                    width = height * page_aspect
+                # Add an instructions slide to pass metadata or indicate rules
+                if instructions or layout_theme or visual_iconography or slide_content_rules:
+                    slide = prs.slides.add_slide(prs.slide_layouts[1]) # Title and Content
+                    slide.shapes.title.text = "Generated PPTX Guidelines applied"
+                    tf = slide.placeholders[1].text_frame
+                    tf.text = "The following guidelines were requested for this presentation:\n"
+                    if layout_theme: tf.add_paragraph().text = f"- Theme: {layout_theme}"
+                    if visual_iconography: tf.add_paragraph().text = f"- Iconography: {visual_iconography}"
+                    if slide_content_rules: tf.add_paragraph().text = f"- Content Rules: {slide_content_rules}"
+                    if instructions: tf.add_paragraph().text = f"- Instructions: {instructions}"
                     
-                left = (SLIDE_WIDTH - width) / 2 + MARGIN
-                top = (SLIDE_HEIGHT - height) / 2 + MARGIN
+                blank_layout = prs.slide_layouts[6]
                 
-                slide.shapes.add_picture(img_path, left, top, width, height)
-                os.remove(img_path)
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    # 1.5x offers a better memory/performance balance for Cloud Run
+                    # while still producing crisp slides for most documents.
+                    mat = fitz.Matrix(1.5, 1.5)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    img_path = os.path.join(run_dir, f"page_{page_num}.png")
+                    pix.save(img_path)
+                    
+                    slide = prs.slides.add_slide(blank_layout)
+                    
+                    img_width = pix.width
+                    img_height = pix.height
+                    page_aspect = img_width / img_height
+                    slide_aspect = (SLIDE_WIDTH - 2 * MARGIN) / (SLIDE_HEIGHT - 2 * MARGIN)
+                    
+                    if page_aspect > slide_aspect:
+                        width = SLIDE_WIDTH - 2 * MARGIN
+                        height = width / page_aspect
+                    else:
+                        height = SLIDE_HEIGHT - 2 * MARGIN
+                        width = height * page_aspect
+                        
+                    left = (SLIDE_WIDTH - width) / 2 + MARGIN
+                    top = (SLIDE_HEIGHT - height) / 2 + MARGIN
+                    
+                    slide.shapes.add_picture(img_path, left, top, width, height)
+                    os.remove(img_path)
+                    
+                prs.save(output_path)
+            else:
+                # DOCX
+                output_filename = "converted_document.docx"
+                output_path = os.path.join(run_dir, output_filename)
                 
+                docx_doc = DocxDocument()
+                docx_doc.add_heading('Generated Document from PDF', 0)
+                
+                if instructions or layout_theme or visual_iconography or slide_content_rules:
+                    docx_doc.add_heading('Generation Guidelines', level=1)
+                    if layout_theme: docx_doc.add_paragraph(f"Theme: {layout_theme}", style='List Bullet')
+                    if visual_iconography: docx_doc.add_paragraph(f"Iconography: {visual_iconography}", style='List Bullet')
+                    if slide_content_rules: docx_doc.add_paragraph(f"Content Rules: {slide_content_rules}", style='List Bullet')
+                    if instructions: docx_doc.add_paragraph(f"Instructions: {instructions}", style='List Bullet')
+                    
+                docx_doc.add_heading('Extracted Content', level=1)
+                
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    text = page.get_text("text")
+                    if text.strip():
+                        docx_doc.add_paragraph(text)
+                
+                docx_doc.save(output_path)
+                
+                # Apply corporate guidelines to the generated docx
+                formatted_output_filename = "final_formatted_document.docx"
+                formatted_output_path = os.path.join(run_dir, formatted_output_filename)
+                apply_guidelines(output_path, formatted_output_path)
+                output_filename = formatted_output_filename
+        finally:
             doc.close()
-            prs.save(output_path)
-            
-        else:
-            # DOCX
-            output_filename = "converted_document.docx"
-            output_path = os.path.join(run_dir, output_filename)
-            
-            docx_doc = DocxDocument()
-            docx_doc.add_heading('Generated Document from PDF', 0)
-            
-            if instructions or layout_theme or visual_iconography or slide_content_rules:
-                docx_doc.add_heading('Generation Guidelines', level=1)
-                if layout_theme: docx_doc.add_paragraph(f"Theme: {layout_theme}", style='List Bullet')
-                if visual_iconography: docx_doc.add_paragraph(f"Iconography: {visual_iconography}", style='List Bullet')
-                if slide_content_rules: docx_doc.add_paragraph(f"Content Rules: {slide_content_rules}", style='List Bullet')
-                if instructions: docx_doc.add_paragraph(f"Instructions: {instructions}", style='List Bullet')
-                
-            docx_doc.add_heading('Extracted Content', level=1)
-            
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                text = page.get_text("text")
-                if text.strip():
-                    docx_doc.add_paragraph(text)
-            
-            doc.close()
-            docx_doc.save(output_path)
-            
-            # Apply corporate guidelines to the generated docx
-            formatted_output_filename = "final_formatted_document.docx"
-            formatted_output_path = os.path.join(run_dir, formatted_output_filename)
-            apply_guidelines(output_path, formatted_output_path)
-            output_filename = formatted_output_filename
             
         file_url = _get_file_url(execution_id, output_filename)
-        stats["successful_creations"] += 1
+        _record_success(file_url, output_filename)
         return {
             "success": True,
             "message": f"Successfully generated {target_format.upper()} from PDF.",
@@ -271,7 +277,9 @@ stats = {
     "requests_received": 0,
     "successful_creations": 0,
     "failed_creations": 0,
-    "last_request_time": None
+    "last_request_time": None,
+    "last_success_file_url": None,
+    "last_success_filename": None
 }
 
 OUTPUT_DIR = os.environ.get("PPTX_OUTPUT_DIR", tempfile.gettempdir())
@@ -336,7 +344,7 @@ def generate_presentation(python_code: str) -> dict:
             
         file_url = _get_file_url(execution_id, pptx_files[0])
             
-        stats["successful_creations"] += 1
+        _record_success(file_url, pptx_files[0])
         return {
             "success": True,
             "message": "Presentation generated successfully.",
@@ -431,7 +439,7 @@ def image_to_presentation(image_source: str, is_url: bool = True) -> dict:
         
         file_url = _get_file_url(execution_id, output_filename)
         
-        stats["successful_creations"] += 1
+        _record_success(file_url, output_filename)
         return {
             "success": True,
             "message": "Image presentation generated successfully.",
