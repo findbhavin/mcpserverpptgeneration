@@ -1,8 +1,9 @@
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+import base64
 import os
+
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
+from pydantic import BaseModel
 import uvicorn
 
 from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, stats, OUTPUT_DIR
@@ -111,6 +112,11 @@ prs.save('output.pptx')"></textarea>
                     <input type="text" id="docxSource" placeholder="Enter DOCX File URL or Base64..." style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" required>
                     <button type="submit" id="submitDocxBtn">Format Document</button>
                 </form>
+                <div style="margin: 12px 0; text-align: center; color: #666;">or</div>
+                <form id="docxUploadForm">
+                    <input type="file" id="docxFile" accept=".docx" style="width: 100%; margin-bottom: 15px;" required>
+                    <button type="submit" id="submitDocxUploadBtn">Upload DOCX & Format</button>
+                </form>
             </div>
 
             <div id="sectionPdf" style="display: none;">
@@ -129,6 +135,19 @@ prs.save('output.pptx')"></textarea>
                     </select>
 
                     <button type="submit" id="submitPdfBtn">Process PDF</button>
+                </form>
+                <div style="margin: 12px 0; text-align: center; color: #666;">or</div>
+                <form id="pdfUploadForm">
+                    <input type="file" id="pdfFile" accept=".pdf" style="width: 100%; margin-bottom: 15px;" required>
+                    <textarea id="pdfUploadInstructions" placeholder="Abstract Instructions..." style="height: 60px;"></textarea>
+                    <input type="text" id="pdfUploadLayoutTheme" placeholder="Layout Theme" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                    <input type="text" id="pdfUploadIconography" placeholder="Visual Iconography" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                    <textarea id="pdfUploadContentRules" placeholder="Slide Content Rules..." style="height: 60px;"></textarea>
+                    <select id="pdfUploadTargetFormat" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
+                        <option value="pptx">Generate PPTX</option>
+                        <option value="docx">Generate DOCX</option>
+                    </select>
+                    <button type="submit" id="submitPdfUploadBtn">Upload PDF & Process</button>
                 </form>
             </div>
 
@@ -269,6 +288,44 @@ prs.save('output.pptx')"></textarea>
                     btn.textContent = 'Format Document';
                 }}
             }});
+            document.getElementById('docxUploadForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                const btn = document.getElementById('submitDocxUploadBtn');
+                const resultBox = document.getElementById('resultBox');
+                const file = document.getElementById('docxFile').files[0];
+                if (!file) return;
+
+                btn.disabled = true;
+                btn.textContent = 'Uploading...';
+                resultBox.style.display = 'none';
+
+                try {{
+                    const formData = new FormData();
+                    formData.append('docx_file', file);
+                    const response = await fetch('/api/format-docx-upload', {{
+                        method: 'POST',
+                        body: formData
+                    }});
+                    const data = await response.json();
+
+                    resultBox.style.display = 'block';
+                    if (data.success) {{
+                        resultBox.className = 'result success';
+                        resultBox.innerHTML = `<strong>Success!</strong> Document formatted. <br><a href="${{data.file_url}}" target="_blank">Download ${{data.filename || 'File'}}</a>`;
+                        setTimeout(() => window.location.reload(), 2000);
+                    }} else {{
+                        resultBox.className = 'result error';
+                        resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
+                    }}
+                }} catch (err) {{
+                    resultBox.style.display = 'block';
+                    resultBox.className = 'result error';
+                    resultBox.textContent = 'Network error occurred.';
+                }} finally {{
+                    btn.disabled = false;
+                    btn.textContent = 'Upload DOCX & Format';
+                }}
+            }});
             document.getElementById('pdfForm').addEventListener('submit', async (e) => {{
                 e.preventDefault();
                 const btn = document.getElementById('submitPdfBtn');
@@ -322,6 +379,51 @@ prs.save('output.pptx')"></textarea>
                     btn.textContent = 'Process PDF';
                 }}
             }});
+            document.getElementById('pdfUploadForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                const btn = document.getElementById('submitPdfUploadBtn');
+                const resultBox = document.getElementById('resultBox');
+                const file = document.getElementById('pdfFile').files[0];
+
+                if (!file) return;
+
+                btn.disabled = true;
+                btn.textContent = 'Uploading...';
+                resultBox.style.display = 'none';
+
+                try {{
+                    const formData = new FormData();
+                    formData.append('pdf_file', file);
+                    formData.append('instructions', document.getElementById('pdfUploadInstructions').value || '');
+                    formData.append('layout_theme', document.getElementById('pdfUploadLayoutTheme').value || '');
+                    formData.append('visual_iconography', document.getElementById('pdfUploadIconography').value || '');
+                    formData.append('slide_content_rules', document.getElementById('pdfUploadContentRules').value || '');
+                    formData.append('target_format', document.getElementById('pdfUploadTargetFormat').value || 'pptx');
+
+                    const response = await fetch('/api/process-pdf-upload', {{
+                        method: 'POST',
+                        body: formData
+                    }});
+                    const data = await response.json();
+
+                    resultBox.style.display = 'block';
+                    if (data.success) {{
+                        resultBox.className = 'result success';
+                        resultBox.innerHTML = `<strong>Success!</strong> File generated. <br><a href="${{data.file_url}}" target="_blank">Download ${{data.filename || 'File'}}</a>`;
+                        setTimeout(() => window.location.reload(), 2000);
+                    }} else {{
+                        resultBox.className = 'result error';
+                        resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
+                    }}
+                }} catch (err) {{
+                    resultBox.style.display = 'block';
+                    resultBox.className = 'result error';
+                    resultBox.textContent = 'Network error occurred.';
+                }} finally {{
+                    btn.disabled = false;
+                    btn.textContent = 'Upload PDF & Process';
+                }}
+            }});
         </script>
     </body>
     </html>
@@ -344,6 +446,13 @@ async def api_image_to_pptx(request: ImageRequest):
 async def api_format_docx(request: DocxRequest):
     return format_document(request.doc_source, request.is_url)
 
+@app.post("/api/format-docx-upload")
+async def api_format_docx_upload(docx_file: UploadFile = File(...)):
+    if not docx_file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Only .docx files are supported.")
+    file_bytes = await docx_file.read()
+    return format_document(base64.b64encode(file_bytes).decode("utf-8"), is_url=False)
+
 @app.post("/api/process-pdf")
 async def api_process_pdf(request: PdfRequest):
     return process_pdf_to_artifacts(
@@ -354,6 +463,30 @@ async def api_process_pdf(request: PdfRequest):
         request.visual_iconography, 
         request.slide_content_rules, 
         request.target_format
+    )
+
+@app.post("/api/process-pdf-upload")
+async def api_process_pdf_upload(
+    pdf_file: UploadFile = File(...),
+    instructions: str = Form(""),
+    layout_theme: str = Form(""),
+    visual_iconography: str = Form(""),
+    slide_content_rules: str = Form(""),
+    target_format: str = Form("pptx")
+):
+    if not pdf_file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
+    if target_format.lower() not in {"pptx", "docx"}:
+        raise HTTPException(status_code=400, detail="target_format must be pptx or docx.")
+    file_bytes = await pdf_file.read()
+    return process_pdf_to_artifacts(
+        base64.b64encode(file_bytes).decode("utf-8"),
+        False,
+        instructions,
+        layout_theme,
+        visual_iconography,
+        slide_content_rules,
+        target_format
     )
 
 @app.get("/downloads/{execution_id}/{filename}")
