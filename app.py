@@ -52,6 +52,15 @@ def _persist_upload_to_tempfile(upload: UploadFile, suffix: str) -> str:
         temp_file.close()
     return temp_file.name
 
+
+def _persist_upload_to_tempfile(upload: UploadFile, suffix: str) -> str:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        shutil.copyfileobj(upload.file, temp_file)
+    finally:
+        temp_file.close()
+    return temp_file.name
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     html_content = f"""
@@ -86,7 +95,13 @@ async def index():
                 </div>
                 <div class="stat-box">
                     <h3>Successful Creations</h3>
-                    <p>{stats['successful_creations']}</p>
+                    <p>
+                        {
+                            f'<a href="{stats["last_success_file_url"]}" title="Download {stats["last_success_filename"] or "latest file"}" style="color: inherit; text-decoration: underline;">{stats["successful_creations"]}</a>'
+                            if stats.get("last_success_file_url")
+                            else str(stats["successful_creations"])
+                        }
+                    </p>
                 </div>
                 <div class="stat-box">
                     <h3>Failed Creations</h3>
@@ -525,6 +540,19 @@ async def api_format_docx_upload(docx_file: UploadFile = File(...), webhook_url:
     temp_path = _persist_upload_to_tempfile(docx_file, ".docx")
     try:
         return format_document(temp_path, is_url=True, webhook_url=webhook_url)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@app.post("/api/format-docx-upload")
+async def api_format_docx_upload(docx_file: UploadFile = File(...)):
+    if not docx_file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Only .docx files are supported.")
+    if docx_file.size and docx_file.size > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large for this deployment.")
+    temp_path = _persist_upload_to_tempfile(docx_file, ".docx")
+    try:
+        return format_document(temp_path, is_url=True)
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
