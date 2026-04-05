@@ -19,6 +19,13 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 import urllib3
+import time
+from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("app")
+
 urllib3.disable_warnings()
 
 class SlideData(BaseModel):
@@ -35,6 +42,30 @@ def _apply_aptos_narrow(shape):
     for paragraph in shape.text_frame.paragraphs:
         for run in paragraph.runs:
             run.font.name = 'Aptos Narrow'
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True
+)
+def _call_genai_with_retry(client, pil_img, prompt_text):
+    try:
+        return client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[pil_img, prompt_text],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=SlideData,
+                temperature=0.2
+            ),
+        )
+    except Exception as e:
+        if "429" in str(e) or "quota" in str(e).lower() or "rate" in str(e).lower():
+            logger.warning(f"GenAI rate limit hit (429/Quota): {e}")
+        else:
+            logger.warning(f"GenAI API error: {e}")
+        raise e
 
 def _fit_image_to_slide(slide, img_path, slide_width, slide_height, margin):
     img = Image.open(img_path)
@@ -194,6 +225,8 @@ def process_pdf_to_artifacts(
                     except:
                         has_genai = False
                 
+                ai_rate_limit_fallback_count = 0
+
                 for page_num in range(len(doc)):
                     page = doc[page_num]
                     # 1.5x offers a better memory/performance balance for Cloud Run
@@ -214,15 +247,12 @@ def process_pdf_to_artifacts(
                             Layout Theme: {layout_theme}
                             Content Rules: {slide_content_rules}"""
                             
-                            response = client.models.generate_content(
-                                model='gemini-2.5-flash',
-                                contents=[pil_img, prompt_text],
-                                config=types.GenerateContentConfig(
-                                    response_mime_type="application/json",
-                                    response_schema=SlideData,
-                                    temperature=0.2
-                                ),
-                            )
+                            try:
+                                response = _call_genai_with_retry(client, pil_img, prompt_text)
+                            except Exception as api_err:
+                                print(f"GenAI API rate limit or other error after retries: {api_err}")
+                                raise api_err
+
                             slide_data = json.loads(response.text)
                             
                             # Build editable slide
@@ -316,6 +346,7 @@ def process_pdf_to_artifacts(
                                     slide.shapes.add_picture(img_path, Inches(8.0), Inches(4.0), Inches(4.5), Inches(3.0))
                         except Exception as e:
                             print(f"GenAI failed for page {page_num}: {e}")
+                            ai_rate_limit_fallback_count += 1
                             slide = prs.slides.add_slide(blank_layout)
                             _fit_image_to_slide(slide, img_path, SLIDE_WIDTH, SLIDE_HEIGHT, MARGIN)
                     else:
@@ -362,9 +393,13 @@ def process_pdf_to_artifacts(
         stats["successful_creations"] += 1
         _add_to_history(execution_id, output_filename, file_url, "process_pdf")
         
+        msg = f"Successfully generated {target_format.upper()} from PDF."
+        if target_format.lower() == "pptx" and ai_rate_limit_fallback_count > 0:
+            msg += f" Note: {ai_rate_limit_fallback_count} slides fell back to original images due to AI API rate limits or errors. Retries were attempted with exponential backoff."
+
         response_payload = {
             "success": True,
-            "message": f"Successfully generated {target_format.upper()} from PDF.",
+            "message": msg,
             "file_url": file_url,
             "execution_id": execution_id,
             "filename": output_filename
