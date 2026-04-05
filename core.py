@@ -234,9 +234,8 @@ def process_pdf_to_artifacts(
 
                 for page_num in range(len(doc)):
                     page = doc[page_num]
-                    # 1.5x offers a better memory/performance balance for Cloud Run
-                    # while still producing crisp slides for most documents.
-                    mat = fitz.Matrix(1.5, 1.5)
+                    # Generate a high-res image for AI to analyze
+                    mat = fitz.Matrix(3.0, 3.0)
                     pix = page.get_pixmap(matrix=mat, alpha=False)
                     img_path = os.path.join(run_dir, f"page_{page_num}.png")
                     pix.save(img_path)
@@ -244,10 +243,13 @@ def process_pdf_to_artifacts(
                     if has_genai:
                         try:
                             pil_img = Image.open(img_path)
-                            prompt_text = f"""Analyze this presentation slide image. 
-                            Extract its content and structure it. 
-                            Suggest a new layout type (choose from: title_and_content, two_column, diagram), 
-                            an overarching punchline, and a keyword for a visual icon that represents the core idea.
+                            prompt_text = f"""Analyze this presentation slide image thoroughly. 
+                            1. Extract all text content and structure it logically.
+                            2. Suggest a new layout type (choose strictly from: title_and_content, two_column, diagram).
+                            3. Provide an overarching punchline.
+                            4. Provide a single keyword for a visual icon that represents the core idea.
+                            5. Determine if the original image contains complex diagrams, charts, or essential visual data that MUST be kept on the slide (set keep_original_image to true if so).
+                            
                             User Instructions: {instructions}
                             Layout Theme: {layout_theme}
                             Content Rules: {slide_content_rules}"""
@@ -258,7 +260,17 @@ def process_pdf_to_artifacts(
                                 print(f"GenAI API rate limit or other error after retries: {api_err}")
                                 raise api_err
 
-                            slide_data = json.loads(response.text)
+                            try:
+                                # Clean response string just in case it has markdown code block formatting
+                                raw_text = response.text.strip()
+                                if raw_text.startswith("```json"):
+                                    raw_text = raw_text[7:]
+                                if raw_text.endswith("```"):
+                                    raw_text = raw_text[:-3]
+                                slide_data = json.loads(raw_text)
+                            except Exception as parse_e:
+                                print(f"JSON Parse error for page {page_num}: {parse_e}\nRaw output was: {response.text}")
+                                raise parse_e
                             
                             # Build editable slide
                             l_type = slide_data.get('layout_type', 'title_and_content')
@@ -352,6 +364,8 @@ def process_pdf_to_artifacts(
                         except Exception as e:
                             print(f"GenAI failed for page {page_num}: {e}")
                             ai_rate_limit_fallback_count += 1
+                            
+                            # Fallback if AI completely fails
                             slide = prs.slides.add_slide(blank_layout)
                             _fit_image_to_slide(slide, img_path, SLIDE_WIDTH, SLIDE_HEIGHT, MARGIN)
                     else:
@@ -402,7 +416,7 @@ def process_pdf_to_artifacts(
         if target_format.lower() == "pptx" and not has_genai:
             msg += " Note: No API key found. Fell back to generating static image slides."
         elif target_format.lower() == "pptx" and ai_rate_limit_fallback_count > 0:
-            msg += f" Note: {ai_rate_limit_fallback_count} slides fell back to original images due to AI API rate limits or errors. Retries were attempted with exponential backoff."
+            msg += f" Note: {ai_rate_limit_fallback_count} slides fell back to original images due to AI API rate limits or errors. Retries were attempted."
 
         response_payload = {
             "success": True,
