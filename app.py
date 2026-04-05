@@ -21,14 +21,17 @@ app.mount("/mcp", mcp_starlette)
 # Pydantic models for API
 class GenerateRequest(BaseModel):
     python_code: str
+    webhook_url: str = None
 
 class ImageRequest(BaseModel):
     image_source: str
     is_url: bool = True
+    webhook_url: str = None
 
 class DocxRequest(BaseModel):
     doc_source: str
     is_url: bool = True
+    webhook_url: str = None
 
 class PdfRequest(BaseModel):
     pdf_source: str
@@ -38,6 +41,7 @@ class PdfRequest(BaseModel):
     visual_iconography: str = ""
     slide_content_rules: str = ""
     target_format: str = "pptx"
+    webhook_url: str = None
 
 
 def _persist_upload_to_tempfile(upload: UploadFile, suffix: str) -> str:
@@ -502,25 +506,25 @@ async def get_stats():
 
 @app.post("/api/generate")
 async def api_generate(request: GenerateRequest):
-    return generate_presentation(request.python_code)
+    return generate_presentation(request.python_code, request.webhook_url)
 
 @app.post("/api/image-to-pptx")
 async def api_image_to_pptx(request: ImageRequest):
-    return image_to_presentation(request.image_source, request.is_url)
+    return image_to_presentation(request.image_source, request.is_url, request.webhook_url)
 
 @app.post("/api/format-docx")
 async def api_format_docx(request: DocxRequest):
-    return format_document(request.doc_source, request.is_url)
+    return format_document(request.doc_source, request.is_url, request.webhook_url)
 
 @app.post("/api/format-docx-upload")
-async def api_format_docx_upload(docx_file: UploadFile = File(...)):
+async def api_format_docx_upload(docx_file: UploadFile = File(...), webhook_url: str = Form(None)):
     if not docx_file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only .docx files are supported.")
     if docx_file.size and docx_file.size > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(status_code=413, detail="File too large for this deployment.")
     temp_path = _persist_upload_to_tempfile(docx_file, ".docx")
     try:
-        return format_document(temp_path, is_url=True)
+        return format_document(temp_path, is_url=True, webhook_url=webhook_url)
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -534,7 +538,8 @@ async def api_process_pdf(request: PdfRequest):
         request.layout_theme, 
         request.visual_iconography, 
         request.slide_content_rules, 
-        request.target_format
+        request.target_format,
+        request.webhook_url
     )
 
 @app.post("/api/process-pdf-upload")
@@ -544,7 +549,8 @@ async def api_process_pdf_upload(
     layout_theme: str = Form(""),
     visual_iconography: str = Form(""),
     slide_content_rules: str = Form(""),
-    target_format: str = Form("pptx")
+    target_format: str = Form("pptx"),
+    webhook_url: str = Form(None)
 ):
     if not pdf_file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
@@ -561,7 +567,8 @@ async def api_process_pdf_upload(
             layout_theme,
             visual_iconography,
             slide_content_rules,
-            target_format
+            target_format,
+            webhook_url
         )
     finally:
         if os.path.exists(temp_path):
