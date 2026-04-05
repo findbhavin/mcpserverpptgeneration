@@ -27,6 +27,7 @@ class SlideData(BaseModel):
     layout_type: str = Field(description="One of: title_and_content, two_column, diagram")
     bullet_points: list[str] = Field(description="The main content points extracted and summarized")
     icon_keyword: str = Field(description="A single keyword to search for an icon representing the slide's intent")
+    keep_original_image: bool = Field(description="Set to true if the original image contains important visual data like a chart, diagram, or photo that should be kept on the slide.")
 
 def _apply_aptos_narrow(shape):
     if not hasattr(shape, 'text_frame'):
@@ -226,59 +227,93 @@ def process_pdf_to_artifacts(
                             
                             # Build editable slide
                             l_type = slide_data.get('layout_type', 'title_and_content')
-                            if l_type == 'two_column':
-                                slide_layout = prs.slide_layouts[3] # Two Content
-                            else:
-                                slide_layout = prs.slide_layouts[1] # Title and Content
+                            if l_type == 'diagram':
+                                slide_layout = prs.slide_layouts[6] # Blank
+                                slide = prs.slides.add_slide(slide_layout)
                                 
-                            slide = prs.slides.add_slide(slide_layout)
-                            
-                            # Set Title
-                            title_shape = slide.shapes.title
-                            title_shape.text = slide_data.get('title', f"Slide {page_num + 1}")
-                            _apply_aptos_narrow(title_shape)
-                            
-                            # Set Subtitle / Punchline
-                            left = Inches(0.5)
-                            top = Inches(1.2)
-                            width = Inches(8.0)
-                            height = Inches(0.5)
-                            txBox = slide.shapes.add_textbox(left, top, width, height)
-                            tf = txBox.text_frame
-                            p = tf.add_paragraph()
-                            p.text = slide_data.get('punchline', '')
-                            p.font.italic = True
-                            p.font.color.rgb = RGBColor(100, 100, 100)
-                            _apply_aptos_narrow(txBox)
-                            
-                            # Set Bullets
-                            body_shape = slide.placeholders[1]
-                            tf = body_shape.text_frame
-                            tf.text = "" # clear default
-                            for bullet in slide_data.get('bullet_points', []):
+                                # We keep the original image for diagrams
+                                _fit_image_to_slide(slide, img_path, SLIDE_WIDTH, SLIDE_HEIGHT, MARGIN)
+                                
+                                # Add a title text box over the image
+                                left = Inches(0.5)
+                                top = Inches(0.2)
+                                width = Inches(12.0)
+                                height = Inches(0.5)
+                                txBox = slide.shapes.add_textbox(left, top, width, height)
+                                tf = txBox.text_frame
                                 p = tf.add_paragraph()
-                                p.text = bullet
-                                p.level = 0
-                            _apply_aptos_narrow(body_shape)
-                            
-                            # Add AI Generated Icon
-                            icon_keyword = slide_data.get('icon_keyword', 'presentation')
-                            icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}"
-                            try:
-                                icon_resp = requests.get(icon_url, verify=False, timeout=10)
-                                if icon_resp.status_code == 200:
-                                    icon_path = os.path.join(run_dir, f"icon_{page_num}.png")
-                                    with open(icon_path, "wb") as f:
-                                        f.write(icon_resp.content)
-                                    slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
-                            except:
-                                pass
+                                p.text = slide_data.get('title', f"Slide {page_num + 1}")
+                                p.font.bold = True
+                                p.font.size = Pt(28)
+                                _apply_aptos_narrow(txBox)
+                            else:
+                                if l_type == 'two_column':
+                                    slide_layout = prs.slide_layouts[3] # Two Content
+                                else:
+                                    slide_layout = prs.slide_layouts[1] # Title and Content
+                                    
+                                slide = prs.slides.add_slide(slide_layout)
                                 
-                            if l_type == 'two_column' and len(slide.placeholders) > 2:
-                                right_body_shape = slide.placeholders[2]
-                                tf_right = right_body_shape.text_frame
-                                tf_right.text = "Visual Placeholder or Additional Info"
-                                _apply_aptos_narrow(right_body_shape)
+                                # Set Title
+                                title_shape = slide.shapes.title
+                                title_shape.text = slide_data.get('title', f"Slide {page_num + 1}")
+                                _apply_aptos_narrow(title_shape)
+                                
+                                # Set Subtitle / Punchline
+                                left = Inches(0.5)
+                                top = Inches(1.2)
+                                width = Inches(8.0)
+                                height = Inches(0.5)
+                                txBox = slide.shapes.add_textbox(left, top, width, height)
+                                tf = txBox.text_frame
+                                p = tf.add_paragraph()
+                                p.text = slide_data.get('punchline', '')
+                                p.font.italic = True
+                                p.font.color.rgb = RGBColor(100, 100, 100)
+                                _apply_aptos_narrow(txBox)
+                                
+                                # Set Bullets
+                                body_shape = slide.placeholders[1]
+                                tf = body_shape.text_frame
+                                tf.text = "" # clear default
+                                for bullet in slide_data.get('bullet_points', []):
+                                    p = tf.add_paragraph()
+                                    p.text = bullet
+                                    p.level = 0
+                                _apply_aptos_narrow(body_shape)
+                                
+                                # Add AI Generated Icon
+                                icon_keyword = slide_data.get('icon_keyword', 'presentation')
+                                icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}"
+                                try:
+                                    icon_resp = requests.get(icon_url, verify=False, timeout=10)
+                                    if icon_resp.status_code == 200:
+                                        icon_path = os.path.join(run_dir, f"icon_{page_num}.png")
+                                        with open(icon_path, "wb") as f:
+                                            f.write(icon_resp.content)
+                                        slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
+                                except:
+                                    pass
+                                    
+                                # If two column, or if AI indicated we should keep the image, put it in the right placeholder
+                                keep_image = slide_data.get('keep_original_image', False)
+                                if (l_type == 'two_column' or keep_image) and len(slide.placeholders) > 2:
+                                    right_body_shape = slide.placeholders[2]
+                                    tf_right = right_body_shape.text_frame
+                                    tf_right.text = "Original Context"
+                                    _apply_aptos_narrow(right_body_shape)
+                                    
+                                    # Insert the original image overlapping the placeholder slightly
+                                    slide.shapes.add_picture(
+                                        img_path, 
+                                        right_body_shape.left, 
+                                        right_body_shape.top + Inches(0.5), 
+                                        right_body_shape.width, 
+                                        right_body_shape.height - Inches(0.5)
+                                    )
+                                elif keep_image:
+                                    # Just add it to the bottom right
+                                    slide.shapes.add_picture(img_path, Inches(8.0), Inches(4.0), Inches(4.5), Inches(3.0))
                         except Exception as e:
                             print(f"GenAI failed for page {page_num}: {e}")
                             slide = prs.slides.add_slide(blank_layout)
