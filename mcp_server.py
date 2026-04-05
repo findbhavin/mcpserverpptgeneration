@@ -12,7 +12,8 @@ def process_pdf(
     visual_iconography: str = "", 
     slide_content_rules: str = "",
     target_format: str = "pptx",
-    webhook_url: str = None
+    webhook_url: str = None,
+    api_key: str = ""
 ) -> str:
     """
     Takes a fresh PDF file and instructions, converting it into a styled PPTX or formatted DOCX.
@@ -25,6 +26,7 @@ def process_pdf(
         slide_content_rules: Guidelines on how to split text across slides.
         target_format: 'pptx' or 'docx'.
         webhook_url: Optional webhook URL to POST the JSON result to.
+        api_key: Optional Gemini or Google GenAI API key. If omitted, falls back to server env vars.
     Returns:
         A JSON string containing the 'success' boolean, 'message', and 'file_url'.
     """
@@ -32,7 +34,7 @@ def process_pdf(
     result = process_pdf_to_artifacts(
         pdf_source, is_url, instructions, layout_theme, 
         visual_iconography, slide_content_rules, target_format,
-        webhook_url=webhook_url
+        webhook_url=webhook_url, api_key=api_key
     )
     return json.dumps(result, indent=2)
 

@@ -42,6 +42,7 @@ class PdfRequest(BaseModel):
     slide_content_rules: str = ""
     target_format: str = "pptx"
     webhook_url: str = None
+    api_key: str = ""
 
 
 def _persist_upload_to_tempfile(upload: UploadFile, suffix: str) -> str:
@@ -183,6 +184,8 @@ prs.save('output.pptx')"></textarea>
                     <input type="text" id="pdfIconography" placeholder="Visual Iconography (e.g., 'Flat design, tech icons')" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                     <textarea id="pdfContentRules" placeholder="Slide Content Rules (e.g., 'Max 5 bullets per slide')..." style="height: 60px;"></textarea>
                     
+                    <input type="text" id="pdfApiKey" placeholder="API Key (optional, defaults to server env. Gemini or Anthropic allowed)" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" />
+
                     <select id="pdfTargetFormat" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
                         <option value="pptx">Generate PPTX</option>
                         <option value="docx">Generate DOCX</option>
@@ -197,6 +200,7 @@ prs.save('output.pptx')"></textarea>
                     <input type="text" id="pdfUploadLayoutTheme" placeholder="Layout Theme" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                     <input type="text" id="pdfUploadIconography" placeholder="Visual Iconography" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                     <textarea id="pdfUploadContentRules" placeholder="Slide Content Rules..." style="height: 60px;"></textarea>
+                    <input type="text" id="pdfUploadApiKey" placeholder="API Key (optional, defaults to server env. Gemini or Anthropic allowed)" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" />
                     <select id="pdfUploadTargetFormat" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
                         <option value="pptx">Generate PPTX</option>
                         <option value="docx">Generate DOCX</option>
@@ -486,7 +490,8 @@ prs.save('output.pptx')"></textarea>
                             layout_theme: theme,
                             visual_iconography: iconography,
                             slide_content_rules: rules,
-                            target_format: format
+                            target_format: format,
+                            api_key: document.getElementById('pdfApiKey') ? document.getElementById('pdfApiKey').value : ''
                         }})
                     }});
                     
@@ -530,6 +535,7 @@ prs.save('output.pptx')"></textarea>
                     formData.append('visual_iconography', document.getElementById('pdfUploadIconography').value || '');
                     formData.append('slide_content_rules', document.getElementById('pdfUploadContentRules').value || '');
                     formData.append('target_format', document.getElementById('pdfUploadTargetFormat').value || 'pptx');
+                    formData.append('api_key', document.getElementById('pdfUploadApiKey').value || '');
 
                     const response = await fetch('/api/process-pdf-upload', {{
                         method: 'POST',

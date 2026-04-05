@@ -160,7 +160,8 @@ def process_pdf_to_artifacts(
     visual_iconography: str = "", 
     slide_content_rules: str = "",
     target_format: str = "pptx",
-    webhook_url: str = None
+    webhook_url: str = None,
+    api_key: str = ""
 ) -> dict:
     """
     Converts a PDF into a PPTX or DOCX, incorporating custom guidelines.
@@ -218,10 +219,14 @@ def process_pdf_to_artifacts(
                     
                 blank_layout = prs.slide_layouts[6]
                 
-                has_genai = os.environ.get("GEMINI_API_KEY") is not None or os.environ.get("GOOGLE_API_KEY") is not None
+                has_genai = bool(api_key) or os.environ.get("GEMINI_API_KEY") is not None or os.environ.get("GOOGLE_API_KEY") is not None
                 if has_genai:
                     try:
-                        client = genai.Client()
+                        # Allow explicit key from request to override environment
+                        if api_key:
+                            client = genai.Client(api_key=api_key)
+                        else:
+                            client = genai.Client()
                     except:
                         has_genai = False
                 
@@ -394,7 +399,9 @@ def process_pdf_to_artifacts(
         _add_to_history(execution_id, output_filename, file_url, "process_pdf")
         
         msg = f"Successfully generated {target_format.upper()} from PDF."
-        if target_format.lower() == "pptx" and ai_rate_limit_fallback_count > 0:
+        if target_format.lower() == "pptx" and not has_genai:
+            msg += " Note: No API key found. Fell back to generating static image slides."
+        elif target_format.lower() == "pptx" and ai_rate_limit_fallback_count > 0:
             msg += f" Note: {ai_rate_limit_fallback_count} slides fell back to original images due to AI API rate limits or errors. Retries were attempted with exponential backoff."
 
         response_payload = {
