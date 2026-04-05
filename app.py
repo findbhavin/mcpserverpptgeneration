@@ -1,5 +1,7 @@
-import base64
 import os
+import shutil
+import tempfile
+import base64
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
@@ -10,6 +12,7 @@ from core import generate_presentation, image_to_presentation, format_document, 
 from mcp_server import mcp
 
 app = FastAPI(title="PPTX Generator API", description="API and UI for generating PowerPoint presentations")
+MAX_UPLOAD_SIZE_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE_BYTES", str(25 * 1024 * 1024)))
 
 # Mount the MCP SSE application
 mcp_starlette = mcp.sse_app()
@@ -35,6 +38,15 @@ class PdfRequest(BaseModel):
     visual_iconography: str = ""
     slide_content_rules: str = ""
     target_format: str = "pptx"
+
+
+def _persist_upload_to_tempfile(upload: UploadFile, suffix: str) -> str:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        shutil.copyfileobj(upload.file, temp_file)
+    finally:
+        temp_file.close()
+    return temp_file.name
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -504,8 +516,14 @@ async def api_format_docx(request: DocxRequest):
 async def api_format_docx_upload(docx_file: UploadFile = File(...)):
     if not docx_file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only .docx files are supported.")
-    file_bytes = await docx_file.read()
-    return format_document(base64.b64encode(file_bytes).decode("utf-8"), is_url=False)
+    if docx_file.size and docx_file.size > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large for this deployment.")
+    temp_path = _persist_upload_to_tempfile(docx_file, ".docx")
+    try:
+        return format_document(temp_path, is_url=True)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 @app.post("/api/process-pdf")
 async def api_process_pdf(request: PdfRequest):
@@ -530,18 +548,24 @@ async def api_process_pdf_upload(
 ):
     if not pdf_file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
+    if pdf_file.size and pdf_file.size > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large for this deployment.")
     if target_format.lower() not in {"pptx", "docx"}:
         raise HTTPException(status_code=400, detail="target_format must be pptx or docx.")
-    file_bytes = await pdf_file.read()
-    return process_pdf_to_artifacts(
-        base64.b64encode(file_bytes).decode("utf-8"),
-        False,
-        instructions,
-        layout_theme,
-        visual_iconography,
-        slide_content_rules,
-        target_format
-    )
+    temp_path = _persist_upload_to_tempfile(pdf_file, ".pdf")
+    try:
+        return process_pdf_to_artifacts(
+            temp_path,
+            True,
+            instructions,
+            layout_theme,
+            visual_iconography,
+            slide_content_rules,
+            target_format
+        )
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 @app.get("/downloads/{execution_id}/{filename}")
 async def download_file(execution_id: str, filename: str):
