@@ -22,6 +22,7 @@ import urllib3
 import time
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 import logging
+import anthropic
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
@@ -65,6 +66,46 @@ def _call_genai_with_retry(client, pil_img, prompt_text):
             logger.warning(f"GenAI rate limit hit (429/Quota): {e}")
         else:
             logger.warning(f"GenAI API error: {e}")
+        raise e
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True
+)
+def _call_anthropic_with_retry(client, b64_img, prompt_text):
+    try:
+        response = client.messages.create(
+            model="claude-3-7-sonnet-20250219",
+            max_tokens=1024,
+            temperature=0.2,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": b64_img
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt_text + "\n\nRespond ONLY with a valid JSON object matching the requested schema."
+                        }
+                    ]
+                }
+            ]
+        )
+        return response.content[0].text
+    except Exception as e:
+        if "429" in str(e) or "quota" in str(e).lower() or "rate" in str(e).lower():
+            logger.warning(f"Anthropic rate limit hit (429/Quota): {e}")
+        else:
+            logger.warning(f"Anthropic API error: {e}")
         raise e
 
 def _fit_image_to_slide(slide, img_path, slide_width, slide_height, margin):
@@ -219,17 +260,38 @@ def process_pdf_to_artifacts(
                     
                 blank_layout = prs.slide_layouts[6]
                 
-                has_genai = bool(api_key) or os.environ.get("GEMINI_API_KEY") is not None or os.environ.get("GOOGLE_API_KEY") is not None
-                if has_genai:
+                # Determine which AI client to use
+                has_genai = False
+                has_anthropic = False
+                client = None
+                
+                # Check for explicit key or environment key
+                use_anthropic = False
+                if api_key.startswith("sk-ant") or (not api_key and os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY")):
+                    use_anthropic = True
+                    
+                if use_anthropic:
                     try:
-                        # Allow explicit key from request to override environment
+                        k = api_key if api_key else os.environ.get("ANTHROPIC_API_KEY")
+                        proxy_url = os.environ.get("GCP_PROXY_FOR_CLAUD")
+                        if proxy_url:
+                            client = anthropic.Anthropic(api_key=k, base_url=proxy_url, max_retries=0)
+                        else:
+                            client = anthropic.Anthropic(api_key=k, max_retries=0)
+                        has_anthropic = True
+                    except:
+                        pass
+                else:
+                    try:
                         if api_key:
                             client = genai.Client(api_key=api_key)
-                        else:
+                        elif os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
                             client = genai.Client()
+                        if client:
+                            has_genai = True
                     except:
-                        has_genai = False
-                
+                        pass
+                        
                 ai_rate_limit_fallback_count = 0
 
                 for page_num in range(len(doc)):
@@ -240,9 +302,8 @@ def process_pdf_to_artifacts(
                     img_path = os.path.join(run_dir, f"page_{page_num}.png")
                     pix.save(img_path)
                     
-                    if has_genai:
+                    if has_genai or has_anthropic:
                         try:
-                            pil_img = Image.open(img_path)
                             prompt_text = f"""Analyze this presentation slide image thoroughly. 
                             1. Extract all text content and structure it logically.
                             2. Suggest a new layout type (choose strictly from: title_and_content, two_column, diagram).
@@ -255,21 +316,30 @@ def process_pdf_to_artifacts(
                             Content Rules: {slide_content_rules}"""
                             
                             try:
-                                response = _call_genai_with_retry(client, pil_img, prompt_text)
+                                if has_anthropic:
+                                    with open(img_path, "rb") as image_file:
+                                        b64_img = base64.b64encode(image_file.read()).decode('utf-8')
+                                    prompt_text += f"\n\nJSON SCHEMA:\n{SlideData.schema_json()}"
+                                    raw_text = _call_anthropic_with_retry(client, b64_img, prompt_text)
+                                else:
+                                    pil_img = Image.open(img_path)
+                                    response = _call_genai_with_retry(client, pil_img, prompt_text)
+                                    raw_text = response.text.strip()
                             except Exception as api_err:
-                                print(f"GenAI API rate limit or other error after retries: {api_err}")
+                                print(f"AI API rate limit or other error after retries: {api_err}")
                                 raise api_err
 
                             try:
                                 # Clean response string just in case it has markdown code block formatting
-                                raw_text = response.text.strip()
                                 if raw_text.startswith("```json"):
                                     raw_text = raw_text[7:]
+                                elif raw_text.startswith("```"):
+                                    raw_text = raw_text[3:]
                                 if raw_text.endswith("```"):
                                     raw_text = raw_text[:-3]
-                                slide_data = json.loads(raw_text)
+                                slide_data = json.loads(raw_text.strip())
                             except Exception as parse_e:
-                                print(f"JSON Parse error for page {page_num}: {parse_e}\nRaw output was: {response.text}")
+                                print(f"JSON Parse error for page {page_num}: {parse_e}\nRaw output was: {raw_text}")
                                 raise parse_e
                             
                             # Build editable slide
@@ -413,8 +483,8 @@ def process_pdf_to_artifacts(
         _add_to_history(execution_id, output_filename, file_url, "process_pdf")
         
         msg = f"Successfully generated {target_format.upper()} from PDF."
-        if target_format.lower() == "pptx" and not has_genai:
-            msg += " Note: No API key found. Fell back to generating static image slides."
+        if target_format.lower() == "pptx" and not (has_genai or has_anthropic):
+            msg += " Note: No valid API key found. Fell back to generating static image slides."
         elif target_format.lower() == "pptx" and ai_rate_limit_fallback_count > 0:
             msg += f" Note: {ai_rate_limit_fallback_count} slides fell back to original images due to AI API rate limits or errors. Retries were attempted."
 

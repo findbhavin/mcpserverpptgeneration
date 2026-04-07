@@ -10,8 +10,24 @@ import uvicorn
 
 from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, stats, generation_history, OUTPUT_DIR
 from mcp_server import mcp
+from werkzeug.middleware.proxy_fix import ProxyFix
+from starlette.middleware.wsgi import WSGIMiddleware
 
 app = FastAPI(title="PPTX Generator API", description="API and UI for generating PowerPoint presentations")
+
+if os.environ.get("GCP_PROXY_FOR_CLAUD"):
+    from fastapi.middleware.trustedhost import TrustedHostMiddleware
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+    from starlette.middleware.base import BaseHTTPMiddleware
+    
+    class ProxyHeadersMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            # Trust downstream proxies (similar to ProxyFix)
+            request.scope["scheme"] = request.headers.get("x-forwarded-proto", request.scope.get("scheme", "http"))
+            return await call_next(request)
+            
+    app.add_middleware(ProxyHeadersMiddleware)
+
 MAX_UPLOAD_SIZE_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE_BYTES", str(25 * 1024 * 1024)))
 
 # Mount the MCP SSE application
