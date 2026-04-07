@@ -8,6 +8,7 @@ WORKDIR /app
 # Create a shared directory for outputs
 RUN mkdir -p /app/outputs && chown mcpuser:mcpuser /app/outputs
 ENV PPTX_OUTPUT_DIR=/app/outputs
+ENV HOME=/tmp
 
 # Install dependencies
 COPY requirements.txt /app/
@@ -26,4 +27,4 @@ USER mcpuser
 # or run with gVisor via the Docker runtime flag: --runtime=runsc
 
 # Run the FastAPI server which also mounts the MCP SSE endpoints
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

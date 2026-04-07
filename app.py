@@ -4,7 +4,7 @@ import tempfile
 import base64
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from pydantic import BaseModel
 import uvicorn
 
@@ -678,11 +678,25 @@ async def api_process_pdf_upload(
             os.remove(temp_path)
 
 @app.get("/downloads/{execution_id}/{filename}")
-async def download_file(execution_id: str, filename: str):
+def download_file(execution_id: str, filename: str):
     file_path = os.path.join(OUTPUT_DIR, execution_id, filename)
-    if os.path.exists(file_path):
-        return FileResponse(file_path, filename=filename)
-    return {"error": "File not found"}
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    with open(file_path, "rb") as f:
+        data = f.read()
+        
+    media_type = "application/octet-stream"
+    if filename.endswith(".pptx"):
+        media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    elif filename.endswith(".docx"):
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
