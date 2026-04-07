@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import base64
+from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, Response
@@ -616,7 +617,7 @@ prs.save('output.pptx')"></textarea>
                         resultBox.className = 'result error';
                         resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
                     }}
-                } catch (err) {{
+                }} catch (err) {{
                     resultBox.style.display = 'block';
                     resultBox.className = 'result error';
                     resultBox.textContent = 'Network error occurred.';
@@ -821,5 +822,5 @@ def download_file(execution_id: str, filename: str):
     )
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
