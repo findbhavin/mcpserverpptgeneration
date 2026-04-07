@@ -27,4 +27,4 @@ USER mcpuser
 # or run with gVisor via the Docker runtime flag: --runtime=runsc
 
 # Run the FastAPI server which also mounts the MCP SSE endpoints
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]
