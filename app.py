@@ -639,7 +639,8 @@ async def api_process_pdf(request: PdfRequest):
         request.visual_iconography, 
         request.slide_content_rules, 
         request.target_format,
-        request.webhook_url
+        request.webhook_url,
+        request.api_key
     )
 
 @app.post("/api/process-pdf-upload")
@@ -650,7 +651,8 @@ async def api_process_pdf_upload(
     visual_iconography: str = Form(""),
     slide_content_rules: str = Form(""),
     target_format: str = Form("pptx"),
-    webhook_url: str = Form(None)
+    webhook_url: str = Form(None),
+    api_key: str = Form("")
 ):
     if not pdf_file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only .pdf files are supported.")
@@ -668,7 +670,8 @@ async def api_process_pdf_upload(
             visual_iconography,
             slide_content_rules,
             target_format,
-            webhook_url
+            webhook_url,
+            api_key
         )
     finally:
         if os.path.exists(temp_path):
