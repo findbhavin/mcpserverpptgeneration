@@ -119,5 +119,51 @@ def generate_from_prompt(
     )
     return json.dumps(result, indent=2)
 
+@mcp.tool()
+def get_capabilities() -> str:
+    """
+    Returns a comprehensive list of capabilities and accepted parameters for this MCP server.
+    External RAG agents should call this first to understand what the server can do.
+    """
+    import json
+    capabilities = {
+        "server_name": "ppt-doc-generator",
+        "description": "Advanced server for generating, parsing, and formatting PPTX and DOCX documents.",
+        "capabilities": [
+            {
+                "tool_name": "generate_from_prompt",
+                "description": "Dynamically generate full presentations (PPTX) or documents (DOCX) from abstract text prompts.",
+                "supported_formats": ["pptx", "docx"],
+                "supported_themes": ["Modern Light", "Dark Corporate", "Pastel", "Blue Accent"],
+                "supported_styles": ["Detailed", "Abstract", "Executive", "Minimalist"],
+                "ai_integration": "Uses Gemini or Anthropic to create content and DiceBear for iconography."
+            },
+            {
+                "tool_name": "process_pdf",
+                "description": "Convert PDF documents into editable PPTX presentations or formatted DOCX documents.",
+                "features": ["AI-driven text extraction", "Layout preservation", "Iconography generation", "Summarization"],
+                "supported_formats": ["pptx", "docx"]
+            },
+            {
+                "tool_name": "convert_image_to_pptx",
+                "description": "Convert a single image (URL, base64, or file path) into a one-slide presentation."
+            },
+            {
+                "tool_name": "apply_docx_template",
+                "description": "Reformat an existing DOCX document to adhere to strict corporate branding and layout guidelines (Aptos Narrow font, specific heading sizes, table formatting, etc.)."
+            },
+            {
+                "tool_name": "generate_pptx",
+                "description": "Directly execute python-pptx code in a sandboxed environment to construct a presentation programmatically."
+            }
+        ],
+        "interaction_guidelines": [
+            "Use webhook_url for long-running generation tasks to get asynchronous results.",
+            "Base64 or public URLs are supported for file inputs.",
+            "When using process_pdf or generate_from_prompt, explicitly passing api_key is recommended if the server is not pre-configured with them."
+        ]
+    }
+    return json.dumps(capabilities, indent=2)
+
 if __name__ == "__main__":
     mcp.run()

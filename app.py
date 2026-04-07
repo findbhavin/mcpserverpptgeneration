@@ -80,6 +80,20 @@ def _persist_upload_to_tempfile(upload: UploadFile, suffix: str) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    if os.environ.get("GCP_PROXY_FOR_CLAUD"):
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head><title>MCP Server</title></head>
+        <body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f5f5f5;">
+            <div style="text-align: center; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                <h1 style="color: #333;">MCP Server Active</h1>
+                <p style="color: #666; max-width: 400px; margin: 0 auto;">This is an MCP Server with specific capabilities. The web interface is disabled in this deployment mode. Please interact with the server via the MCP protocol or REST API.</p>
+            </div>
+        </body>
+        </html>
+        """)
+
     html_content = f"""
     <!DOCTYPE html>
     <html>
