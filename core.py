@@ -37,12 +37,26 @@ class SlideData(BaseModel):
     icon_keyword: str = Field(description="A single keyword to search for an icon representing the slide's intent")
     keep_original_image: bool = Field(description="Set to true if the original image contains important visual data like a chart, diagram, or photo that should be kept on the slide.")
 
-def _apply_aptos_narrow(shape):
+class PresentationData(BaseModel):
+    slides: list[SlideData] = Field(description="List of generated slides")
+
+class SectionData(BaseModel):
+    heading: str = Field(description="Section heading")
+    content: str = Field(description="Multiple paragraphs of text for this section")
+    bullet_points: list[str] = Field(description="Optional bullet points for this section")
+
+class DocumentData(BaseModel):
+    title: str = Field(description="Document title")
+    sections: list[SectionData] = Field(description="Document sections")
+
+def _apply_aptos_narrow(shape, font_color=None):
     if not hasattr(shape, 'text_frame'):
         return
     for paragraph in shape.text_frame.paragraphs:
         for run in paragraph.runs:
             run.font.name = 'Aptos Narrow'
+            if font_color:
+                run.font.color.rgb = font_color
 
 @retry(
     stop=stop_after_attempt(5),
@@ -106,6 +120,53 @@ def _call_anthropic_with_retry(client, b64_img, prompt_text):
             logger.warning(f"Anthropic rate limit hit (429/Quota): {e}")
         else:
             logger.warning(f"Anthropic API error: {e}")
+        raise e
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True
+)
+def _call_genai_text_with_retry(client, prompt_text, schema):
+    try:
+        return client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[prompt_text],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=schema,
+                temperature=0.4
+            ),
+        )
+    except Exception as e:
+        if "429" in str(e) or "quota" in str(e).lower() or "rate" in str(e).lower():
+            logger.warning(f"GenAI text rate limit hit: {e}")
+        raise e
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True
+)
+def _call_anthropic_text_with_retry(client, prompt_text, schema):
+    try:
+        response = client.messages.create(
+            model="claude-3-7-sonnet-20250219",
+            max_tokens=4000,
+            temperature=0.4,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt_text + f"\n\nRespond ONLY with a valid JSON object matching the requested schema:\n{schema.schema_json()}"
+                }
+            ]
+        )
+        return response.content[0].text
+    except Exception as e:
+        if "429" in str(e) or "quota" in str(e).lower() or "rate" in str(e).lower():
+            logger.warning(f"Anthropic text rate limit hit: {e}")
         raise e
 
 def _fit_image_to_slide(slide, img_path, slide_width, slide_height, margin):
@@ -779,6 +840,233 @@ def image_to_presentation(image_source: str, is_url: bool = True, webhook_url: s
         error_payload = {
             "success": False,
             "message": f"Error converting image to presentation: {str(e)}"
+        }
+        _trigger_webhook(webhook_url, error_payload)
+        return error_payload
+def generate_artifacts_from_prompt(
+    prompt: str,
+    target_format: str = "pptx",
+    presentation_style: str = "Detailed",
+    layout_theme: str = "Modern Light",
+    num_slides: int = 5,
+    webhook_url: str = None,
+    api_key: str = ""
+) -> dict:
+    """
+    Dynamically generates a full presentation or document strictly from a text prompt.
+    Takes into account requested themes and styles.
+    """
+    stats["requests_received"] += 1
+    stats["last_request_time"] = datetime.now().isoformat()
+    
+    execution_id = str(uuid.uuid4())
+    run_dir = os.path.join(OUTPUT_DIR, execution_id)
+    os.makedirs(run_dir, exist_ok=True)
+    
+    try:
+        has_genai = False
+        has_anthropic = False
+        client = None
+        
+        use_anthropic = False
+        if api_key.startswith("sk-ant") or (not api_key and os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY")):
+            use_anthropic = True
+            
+        if use_anthropic:
+            try:
+                k = api_key if api_key else os.environ.get("ANTHROPIC_API_KEY")
+                proxy_url = os.environ.get("GCP_PROXY_FOR_CLAUD")
+                if proxy_url:
+                    client = anthropic.Anthropic(api_key=k, base_url=proxy_url, max_retries=0)
+                else:
+                    client = anthropic.Anthropic(api_key=k, max_retries=0)
+                has_anthropic = True
+            except:
+                pass
+        else:
+            try:
+                if api_key:
+                    client = genai.Client(api_key=api_key)
+                elif os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+                    client = genai.Client()
+                if client:
+                    has_genai = True
+            except:
+                pass
+                
+        if not (has_genai or has_anthropic):
+            raise Exception("No valid GenAI or Anthropic API key configured.")
+            
+        if target_format.lower() == "pptx":
+            system_prompt = f"""You are an expert presentation designer.
+Create a {num_slides}-slide presentation outline on the following topic: {prompt}
+
+Presentation Style Constraint: {presentation_style}
+Theme Concept: {layout_theme}
+
+Write punchlines and bullet points that match the style (e.g. if 'Abstract' or 'Minimalist', use few words. If 'Detailed', use comprehensive bullets).
+Choose appropriate layout types (title_and_content, two_column).
+"""
+            if use_anthropic:
+                raw_text = _call_anthropic_text_with_retry(client, system_prompt, PresentationData)
+            else:
+                response = _call_genai_text_with_retry(client, system_prompt, PresentationData)
+                raw_text = response.text
+                
+            try:
+                raw_text = raw_text.strip()
+                if raw_text.startswith("```json"): raw_text = raw_text[7:]
+                elif raw_text.startswith("```"): raw_text = raw_text[3:]
+                if raw_text.endswith("```"): raw_text = raw_text[:-3]
+                data = json.loads(raw_text.strip())
+            except Exception as e:
+                raise Exception(f"Failed to parse LLM JSON: {e}")
+                
+            output_filename = "generated_presentation.pptx"
+            output_path = os.path.join(run_dir, output_filename)
+            
+            prs = Presentation()
+            prs.slide_width = SLIDE_WIDTH
+            prs.slide_height = SLIDE_HEIGHT
+            
+            # Theme parsing
+            bg_color = RGBColor(255, 255, 255)
+            text_color = RGBColor(0, 0, 0)
+            theme_low = layout_theme.lower()
+            if "dark" in theme_low:
+                bg_color = RGBColor(30, 30, 30)
+                text_color = RGBColor(250, 250, 250)
+            elif "pastel" in theme_low:
+                bg_color = RGBColor(245, 245, 250)
+                text_color = RGBColor(50, 50, 50)
+            elif "blue" in theme_low:
+                bg_color = RGBColor(240, 248, 255)
+                text_color = RGBColor(10, 30, 60)
+            
+            slides_data = data.get("slides", [])
+            for i, s_data in enumerate(slides_data):
+                l_type = s_data.get('layout_type', 'title_and_content')
+                if l_type == 'two_column':
+                    slide_layout = prs.slide_layouts[3]
+                else:
+                    slide_layout = prs.slide_layouts[1]
+                    
+                slide = prs.slides.add_slide(slide_layout)
+                
+                # Apply background color
+                background = slide.background
+                fill = background.fill
+                fill.solid()
+                fill.fore_color.rgb = bg_color
+                
+                # Set Title
+                title_shape = slide.shapes.title
+                title_shape.text = s_data.get('title', f"Slide {i + 1}")
+                _apply_aptos_narrow(title_shape, font_color=text_color)
+                
+                # Set Subtitle / Punchline
+                left = Inches(0.5)
+                top = Inches(1.2)
+                width = Inches(8.0)
+                height = Inches(0.5)
+                txBox = slide.shapes.add_textbox(left, top, width, height)
+                tf = txBox.text_frame
+                p = tf.add_paragraph()
+                p.text = s_data.get('punchline', '')
+                p.font.italic = True
+                # Dim the punchline slightly relative to text color
+                if "dark" in theme_low: p.font.color.rgb = RGBColor(180, 180, 180)
+                else: p.font.color.rgb = RGBColor(100, 100, 100)
+                _apply_aptos_narrow(txBox)
+                
+                # Set Bullets
+                body_shape = slide.placeholders[1]
+                tf = body_shape.text_frame
+                tf.text = "" # clear default
+                for bullet in s_data.get('bullet_points', []):
+                    p = tf.add_paragraph()
+                    p.text = bullet
+                    p.level = 0
+                _apply_aptos_narrow(body_shape, font_color=text_color)
+                
+                # Add AI Generated Icon
+                icon_keyword = s_data.get('icon_keyword', 'presentation')
+                icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}"
+                try:
+                    icon_resp = requests.get(icon_url, verify=False, timeout=10)
+                    if icon_resp.status_code == 200:
+                        icon_path = os.path.join(run_dir, f"icon_{i}.png")
+                        with open(icon_path, "wb") as f:
+                            f.write(icon_resp.content)
+                        slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
+                except:
+                    pass
+            
+            prs.save(output_path)
+            
+        else: # DOCX
+            system_prompt = f"""You are an expert document author.
+Create a detailed, well-structured document on the following topic: {prompt}
+
+Document Style Constraint: {presentation_style}
+Theme/Tone: {layout_theme}
+"""
+            if use_anthropic:
+                raw_text = _call_anthropic_text_with_retry(client, system_prompt, DocumentData)
+            else:
+                response = _call_genai_text_with_retry(client, system_prompt, DocumentData)
+                raw_text = response.text
+                
+            try:
+                raw_text = raw_text.strip()
+                if raw_text.startswith("```json"): raw_text = raw_text[7:]
+                elif raw_text.startswith("```"): raw_text = raw_text[3:]
+                if raw_text.endswith("```"): raw_text = raw_text[:-3]
+                data = json.loads(raw_text.strip())
+            except Exception as e:
+                raise Exception(f"Failed to parse LLM JSON: {e}")
+                
+            output_filename = "generated_document.docx"
+            output_path = os.path.join(run_dir, output_filename)
+            
+            docx_doc = DocxDocument()
+            docx_doc.add_heading(data.get("title", "Generated Document"), 0)
+            
+            for section in data.get("sections", []):
+                docx_doc.add_heading(section.get("heading", "Section"), level=1)
+                for paragraph in section.get("content", "").split("\n\n"):
+                    if paragraph.strip():
+                        docx_doc.add_paragraph(paragraph.strip())
+                for bullet in section.get("bullet_points", []):
+                    docx_doc.add_paragraph(bullet, style='List Bullet')
+                    
+            docx_doc.save(output_path)
+            
+            # Apply formatting guidelines
+            formatted_output_filename = "final_formatted_document.docx"
+            formatted_output_path = os.path.join(run_dir, formatted_output_filename)
+            apply_guidelines(output_path, formatted_output_path)
+            output_filename = formatted_output_filename
+            
+        file_url = _get_file_url(execution_id, output_filename)
+        stats["successful_creations"] += 1
+        _add_to_history(execution_id, output_filename, file_url, "generate_from_prompt")
+        
+        response_payload = {
+            "success": True,
+            "message": f"Successfully generated {target_format.upper()} from prompt.",
+            "file_url": file_url,
+            "execution_id": execution_id,
+            "filename": output_filename
+        }
+        _trigger_webhook(webhook_url, response_payload)
+        return response_payload
+
+    except Exception as e:
+        stats["failed_creations"] += 1
+        error_payload = {
+            "success": False,
+            "message": f"Error generating from prompt: {str(e)}"
         }
         _trigger_webhook(webhook_url, error_payload)
         return error_payload

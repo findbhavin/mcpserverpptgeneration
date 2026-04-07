@@ -83,5 +83,41 @@ def apply_docx_template(doc_source: str, is_url: bool = True, webhook_url: str =
     result = format_document(doc_source, is_url, webhook_url=webhook_url)
     return json.dumps(result, indent=2)
 
+@mcp.tool()
+def generate_from_prompt(
+    prompt: str,
+    target_format: str = "pptx",
+    presentation_style: str = "Detailed",
+    layout_theme: str = "Modern Light",
+    num_slides: int = 5,
+    webhook_url: str = None,
+    api_key: str = ""
+) -> str:
+    """
+    Dynamically generates a full presentation or document strictly from a text prompt.
+    Args:
+        prompt: The main topic or prompt to generate the presentation/document from.
+        target_format: 'pptx' or 'docx'.
+        presentation_style: E.g., "Detailed", "Abstract", "Executive", "Minimalist".
+        layout_theme: E.g., "Dark Corporate", "Light Modern", "Pastel".
+        num_slides: Number of slides to generate (if pptx).
+        webhook_url: Optional webhook URL to POST the JSON result to.
+        api_key: AI API Key to use for content generation.
+    Returns:
+        A JSON string containing the 'success' boolean, 'message', and 'file_url'.
+    """
+    import json
+    from core import generate_artifacts_from_prompt
+    result = generate_artifacts_from_prompt(
+        prompt=prompt,
+        target_format=target_format,
+        presentation_style=presentation_style,
+        layout_theme=layout_theme,
+        num_slides=num_slides,
+        webhook_url=webhook_url,
+        api_key=api_key
+    )
+    return json.dumps(result, indent=2)
+
 if __name__ == "__main__":
     mcp.run()

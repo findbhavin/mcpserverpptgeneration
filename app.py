@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, FileResponse, Response
 from pydantic import BaseModel
 import uvicorn
 
-from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, stats, generation_history, OUTPUT_DIR
+from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, generate_artifacts_from_prompt, stats, generation_history, OUTPUT_DIR
 from mcp_server import mcp
 from werkzeug.middleware.proxy_fix import ProxyFix
 from starlette.middleware.wsgi import WSGIMiddleware
@@ -131,11 +131,12 @@ async def index():
                 </div>
             </div>
 
-            <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+            <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;">
                 <button id="tabCode" style="flex: 1; background: #007bff;" onclick="switchTab('code')">Generate from Code</button>
                 <button id="tabImage" style="flex: 1; background: #6c757d;" onclick="switchTab('image')">Image to PPTX</button>
-                <button id="tabDocx" style="flex: 1; background: #6c757d;" onclick="switchTab('docx')">Format DOCX Template</button>
+                <button id="tabDocx" style="flex: 1; background: #6c757d;" onclick="switchTab('docx')">Format DOCX</button>
                 <button id="tabPdf" style="flex: 1; background: #6c757d;" onclick="switchTab('pdf')">Process PDF</button>
+                <button id="tabPrompt" style="flex: 1; background: #6c757d;" onclick="switchTab('prompt')">Create from Prompt</button>
             </div>
 
             <div id="sectionCode">
@@ -225,6 +226,37 @@ prs.save('output.pptx')"></textarea>
                 </form>
             </div>
 
+            <div id="sectionPrompt" style="display: none;">
+                <h2>Generate from Prompt</h2>
+                <form id="promptForm">
+                    <textarea id="promptText" placeholder="Enter topic or detailed prompt..." style="height: 80px;" required></textarea>
+                    
+                    <select id="promptTargetFormat" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
+                        <option value="pptx">Generate Presentation (PPTX)</option>
+                        <option value="docx">Generate Document (DOCX)</option>
+                    </select>
+
+                    <select id="promptStyle" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
+                        <option value="Detailed">Detailed (Comprehensive content, more bullets)</option>
+                        <option value="Abstract">Abstract (High-level concepts, fewer words)</option>
+                        <option value="Executive">Executive Summary (Key takeaways only)</option>
+                        <option value="Minimalist">Minimalist (Highly visual, very few words)</option>
+                    </select>
+
+                    <select id="promptTheme" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
+                        <option value="Modern Light">Modern Light (White BG, Dark Text)</option>
+                        <option value="Dark Corporate">Dark Corporate (Dark BG, Light Text)</option>
+                        <option value="Pastel">Pastel (Soft Colors)</option>
+                        <option value="Blue Accent">Blue Accent (Corporate Blue)</option>
+                    </select>
+                    
+                    <input type="number" id="promptNumSlides" placeholder="Number of Slides (for PPTX)" value="5" min="1" max="20" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                    <input type="text" id="promptApiKey" placeholder="API Key (optional, Gemini or Anthropic)" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" />
+                    
+                    <button type="submit" id="submitPromptBtn">Generate</button>
+                </form>
+            </div>
+
             <div id="resultBox" class="result"></div>
             
             <hr style="margin: 40px 0; border: 0; border-top: 1px solid #eee;">
@@ -284,10 +316,12 @@ prs.save('output.pptx')"></textarea>
                 document.getElementById('sectionImage').style.display = tab === 'image' ? 'block' : 'none';
                 document.getElementById('sectionDocx').style.display = tab === 'docx' ? 'block' : 'none';
                 document.getElementById('sectionPdf').style.display = tab === 'pdf' ? 'block' : 'none';
+                document.getElementById('sectionPrompt').style.display = tab === 'prompt' ? 'block' : 'none';
                 document.getElementById('tabCode').style.background = tab === 'code' ? '#007bff' : '#6c757d';
                 document.getElementById('tabImage').style.background = tab === 'image' ? '#007bff' : '#6c757d';
                 document.getElementById('tabDocx').style.background = tab === 'docx' ? '#007bff' : '#6c757d';
                 document.getElementById('tabPdf').style.background = tab === 'pdf' ? '#007bff' : '#6c757d';
+                document.getElementById('tabPrompt').style.background = tab === 'prompt' ? '#007bff' : '#6c757d';
                 document.getElementById('resultBox').style.display = 'none';
             }}
 
@@ -568,13 +602,66 @@ prs.save('output.pptx')"></textarea>
                         resultBox.className = 'result error';
                         resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
                     }}
-                }} catch (err) {{
+                } catch (err) {{
                     resultBox.style.display = 'block';
                     resultBox.className = 'result error';
                     resultBox.textContent = 'Network error occurred.';
                 }} finally {{
                     btn.disabled = false;
                     btn.textContent = 'Upload PDF & Process';
+                }}
+            }});
+            
+            document.getElementById('promptForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                const btn = document.getElementById('submitPromptBtn');
+                const resultBox = document.getElementById('resultBox');
+                
+                const prompt = document.getElementById('promptText').value;
+                const format = document.getElementById('promptTargetFormat').value;
+                const style = document.getElementById('promptStyle').value;
+                const theme = document.getElementById('promptTheme').value;
+                const numSlides = parseInt(document.getElementById('promptNumSlides').value);
+                const apiKey = document.getElementById('promptApiKey').value;
+                
+                if (!prompt) return;
+                
+                btn.disabled = true;
+                btn.textContent = 'Generating...';
+                resultBox.style.display = 'none';
+                
+                try {{
+                    const response = await fetch('/api/generate-from-prompt', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ 
+                            prompt: prompt,
+                            target_format: format,
+                            presentation_style: style,
+                            layout_theme: theme,
+                            num_slides: numSlides,
+                            api_key: apiKey
+                        }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    resultBox.style.display = 'block';
+                    if (data.success) {{
+                        resultBox.className = 'result success';
+                        resultBox.innerHTML = `<strong>Success!</strong> Artifact generated. <br><a href="${{data.file_url}}" target="_blank">Download ${{data.filename || 'File'}}</a>`;
+                        setTimeout(() => window.location.reload(), 2000);
+                    }} else {{
+                        resultBox.className = 'result error';
+                        resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
+                    }}
+                }} catch (err) {{
+                    resultBox.style.display = 'block';
+                    resultBox.className = 'result error';
+                    resultBox.textContent = 'Network error occurred.';
+                }} finally {{
+                    btn.disabled = false;
+                    btn.textContent = 'Generate';
                 }}
             }});
         </script>
@@ -590,6 +677,27 @@ async def get_stats():
 @app.get("/api/history")
 async def get_history():
     return generation_history
+
+class GenerateFromPromptRequest(BaseModel):
+    prompt: str
+    target_format: str = "pptx"
+    presentation_style: str = "Detailed"
+    layout_theme: str = "Modern Light"
+    num_slides: int = 5
+    webhook_url: Optional[str] = None
+    api_key: str = ""
+
+@app.post("/api/generate-from-prompt")
+async def api_generate_from_prompt(request: GenerateFromPromptRequest):
+    return generate_artifacts_from_prompt(
+        prompt=request.prompt,
+        target_format=request.target_format,
+        presentation_style=request.presentation_style,
+        layout_theme=request.layout_theme,
+        num_slides=request.num_slides,
+        webhook_url=request.webhook_url,
+        api_key=request.api_key
+    )
 
 @app.post("/api/generate")
 async def api_generate(request: GenerateRequest):
