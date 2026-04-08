@@ -653,6 +653,7 @@ class GenerateFromPromptRequest(BaseModel):
     api_key: str = ""
 
 @app.post("/api/generate-from-prompt")
+@app.post("/api/generate_from_prompt")
 async def api_generate_from_prompt(request: GenerateFromPromptRequest):
     return generate_artifacts_from_prompt(
         prompt=request.prompt,
