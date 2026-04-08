@@ -147,23 +147,33 @@ async def index():
             </div>
 
             <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;">
-                <button id="tabCode" style="flex: 1; background: #007bff;" onclick="switchTab('code')">Generate from Code</button>
+                <button id="tabSmart" style="flex: 1; background: #007bff;" onclick="switchTab('smart')">Smart Generate</button>
                 <button id="tabImage" style="flex: 1; background: #6c757d;" onclick="switchTab('image')">Image to PPTX</button>
                 <button id="tabDocx" style="flex: 1; background: #6c757d;" onclick="switchTab('docx')">Format DOCX</button>
                 <button id="tabPdf" style="flex: 1; background: #6c757d;" onclick="switchTab('pdf')">Process PDF</button>
-                <button id="tabPrompt" style="flex: 1; background: #6c757d;" onclick="switchTab('prompt')">Create from Prompt</button>
             </div>
 
-            <div id="sectionCode">
-                <h2>Trigger Presentation Creation</h2>
-                <form id="generateForm">
-                    <textarea id="pythonCode" placeholder="Enter python-pptx code here... Example:
-from pptx import Presentation
-prs = Presentation()
-slide = prs.slides.add_slide(prs.slide_layouts[0])
-slide.shapes.title.text = 'Hello World'
-prs.save('output.pptx')"></textarea>
-                    <button type="submit" id="submitBtn">Generate PPTX</button>
+            <div id="sectionSmart">
+                <h2>Smart Generate</h2>
+                <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
+                    Enter a natural language prompt to generate a presentation automatically, OR paste a raw `python-pptx` script to execute it directly.
+                </p>
+                
+                <div style="margin-bottom: 15px; background: #e9ecef; padding: 10px; border-radius: 4px; font-size: 13px;">
+                    <strong>Sample Prompts:</strong>
+                    <ul style="margin: 5px 0 0 20px; padding: 0; color: #555;">
+                        <li>"Create a 5-slide executive summary on Artificial Intelligence using a Dark Corporate theme."</li>
+                        <li>"Make a 10-slide presentation about Climate Change with pastel colors and minimalist style."</li>
+                        <li>"Write a detailed document (docx) explaining quantum computing basics with Aptos Narrow font."</li>
+                    </ul>
+                </div>
+
+                <form id="smartForm">
+                    <textarea id="smartInput" placeholder="Enter your prompt here... OR paste python-pptx code..." style="height: 150px;" required></textarea>
+                    
+                    <input type="text" id="smartApiKey" placeholder="API Key (optional, Gemini or Anthropic)" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" />
+                    
+                    <button type="submit" id="submitSmartBtn">Generate Magic</button>
                 </form>
             </div>
 
@@ -241,36 +251,6 @@ prs.save('output.pptx')"></textarea>
                 </form>
             </div>
 
-            <div id="sectionPrompt" style="display: none;">
-                <h2>Generate from Prompt</h2>
-                <form id="promptForm">
-                    <textarea id="promptText" placeholder="Enter topic or detailed prompt..." style="height: 80px;" required></textarea>
-                    
-                    <select id="promptTargetFormat" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
-                        <option value="pptx">Generate Presentation (PPTX)</option>
-                        <option value="docx">Generate Document (DOCX)</option>
-                    </select>
-
-                    <select id="promptStyle" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
-                        <option value="Detailed">Detailed (Comprehensive content, more bullets)</option>
-                        <option value="Abstract">Abstract (High-level concepts, fewer words)</option>
-                        <option value="Executive">Executive Summary (Key takeaways only)</option>
-                        <option value="Minimalist">Minimalist (Highly visual, very few words)</option>
-                    </select>
-
-                    <select id="promptTheme" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px;">
-                        <option value="Modern Light">Modern Light (White BG, Dark Text)</option>
-                        <option value="Dark Corporate">Dark Corporate (Dark BG, Light Text)</option>
-                        <option value="Pastel">Pastel (Soft Colors)</option>
-                        <option value="Blue Accent">Blue Accent (Corporate Blue)</option>
-                    </select>
-                    
-                    <input type="number" id="promptNumSlides" placeholder="Number of Slides (for PPTX)" value="5" min="1" max="20" style="width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
-                    <input type="text" id="promptApiKey" placeholder="API Key (optional, Gemini or Anthropic)" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;" />
-                    
-                    <button type="submit" id="submitPromptBtn">Generate</button>
-                </form>
-            </div>
 
             <div id="resultBox" class="result"></div>
             
@@ -327,59 +307,16 @@ prs.save('output.pptx')"></textarea>
             }}
 
             function switchTab(tab) {{
-                document.getElementById('sectionCode').style.display = tab === 'code' ? 'block' : 'none';
+                document.getElementById('sectionSmart').style.display = tab === 'smart' ? 'block' : 'none';
                 document.getElementById('sectionImage').style.display = tab === 'image' ? 'block' : 'none';
                 document.getElementById('sectionDocx').style.display = tab === 'docx' ? 'block' : 'none';
                 document.getElementById('sectionPdf').style.display = tab === 'pdf' ? 'block' : 'none';
-                document.getElementById('sectionPrompt').style.display = tab === 'prompt' ? 'block' : 'none';
-                document.getElementById('tabCode').style.background = tab === 'code' ? '#007bff' : '#6c757d';
+                document.getElementById('tabSmart').style.background = tab === 'smart' ? '#007bff' : '#6c757d';
                 document.getElementById('tabImage').style.background = tab === 'image' ? '#007bff' : '#6c757d';
                 document.getElementById('tabDocx').style.background = tab === 'docx' ? '#007bff' : '#6c757d';
                 document.getElementById('tabPdf').style.background = tab === 'pdf' ? '#007bff' : '#6c757d';
-                document.getElementById('tabPrompt').style.background = tab === 'prompt' ? '#007bff' : '#6c757d';
                 document.getElementById('resultBox').style.display = 'none';
             }}
-
-            document.getElementById('generateForm').addEventListener('submit', async (e) => {{
-                e.preventDefault();
-                const btn = document.getElementById('submitBtn');
-                const resultBox = document.getElementById('resultBox');
-                const code = document.getElementById('pythonCode').value;
-                
-                if (!code) return;
-                
-                btn.disabled = true;
-                btn.textContent = 'Generating...';
-                resultBox.style.display = 'none';
-                
-                try {{
-                    const response = await fetch('/api/generate', {{
-                        method: 'POST',
-                        headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ python_code: code }})
-                    }});
-                    
-                    const data = await response.json();
-                    
-                    resultBox.style.display = 'block';
-                    if (data.success) {{
-                        resultBox.className = 'result success';
-                        resultBox.innerHTML = `<strong>Success!</strong> Presentation generated. <br><a href="${{data.file_url}}" target="_blank">Download ${{data.filename || 'File'}}</a>`;
-                        
-                        setTimeout(() => window.location.reload(), 2000);
-                    }} else {{
-                        resultBox.className = 'result error';
-                        resultBox.innerHTML = `<strong>Error!</strong><br><pre>${{data.message}}</pre>`;
-                    }}
-                }} catch (err) {{
-                    resultBox.style.display = 'block';
-                    resultBox.className = 'result error';
-                    resultBox.textContent = 'Network error occurred.';
-                }} finally {{
-                    btn.disabled = false;
-                    btn.textContent = 'Generate PPTX';
-                }}
-            }});
 
             document.getElementById('imageForm').addEventListener('submit', async (e) => {{
                 e.preventDefault();
@@ -627,37 +564,50 @@ prs.save('output.pptx')"></textarea>
                 }}
             }});
             
-            document.getElementById('promptForm').addEventListener('submit', async (e) => {{
+            document.getElementById('smartForm').addEventListener('submit', async (e) => {{
                 e.preventDefault();
-                const btn = document.getElementById('submitPromptBtn');
+                const btn = document.getElementById('submitSmartBtn');
                 const resultBox = document.getElementById('resultBox');
                 
-                const prompt = document.getElementById('promptText').value;
-                const format = document.getElementById('promptTargetFormat').value;
-                const style = document.getElementById('promptStyle').value;
-                const theme = document.getElementById('promptTheme').value;
-                const numSlides = parseInt(document.getElementById('promptNumSlides').value);
-                const apiKey = document.getElementById('promptApiKey').value;
+                const inputVal = document.getElementById('smartInput').value;
+                const apiKey = document.getElementById('smartApiKey').value;
                 
-                if (!prompt) return;
+                if (!inputVal) return;
                 
                 btn.disabled = true;
                 btn.textContent = 'Generating...';
                 resultBox.style.display = 'none';
                 
                 try {{
-                    const response = await fetch('/api/generate-from-prompt', {{
-                        method: 'POST',
-                        headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ 
-                            prompt: prompt,
-                            target_format: format,
-                            presentation_style: style,
-                            layout_theme: theme,
-                            num_slides: numSlides,
-                            api_key: apiKey
-                        }})
-                    }});
+                    let response;
+                    
+                    // Simple heuristic: if it looks like python-pptx code, run it as code
+                    if (inputVal.includes("from pptx import") || inputVal.includes("prs.save(")) {{
+                        response = await fetch('/api/generate', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ python_code: inputVal }})
+                        }});
+                    }} else {{
+                        // Default to generating from prompt (extracting target format from prompt text)
+                        let targetFormat = "pptx";
+                        if (inputVal.toLowerCase().includes("docx") || inputVal.toLowerCase().includes("document")) {{
+                            targetFormat = "docx";
+                        }}
+                        
+                        response = await fetch('/api/generate-from-prompt', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ 
+                                prompt: inputVal,
+                                target_format: targetFormat,
+                                presentation_style: "Detailed", // Default
+                                layout_theme: "Modern Light", // Default
+                                num_slides: 5, // Default
+                                api_key: apiKey
+                            }})
+                        }});
+                    }}
                     
                     const data = await response.json();
                     
@@ -676,7 +626,7 @@ prs.save('output.pptx')"></textarea>
                     resultBox.textContent = 'Network error occurred.';
                 }} finally {{
                     btn.disabled = false;
-                    btn.textContent = 'Generate';
+                    btn.textContent = 'Generate Magic';
                 }}
             }});
         </script>
