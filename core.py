@@ -254,6 +254,14 @@ def format_document(doc_source: str, is_url: bool = True, webhook_url: str = Non
             "message": f"Error formatting document: {str(e)}"
         }
 
+def _send_progress(webhook_url, message, status="in_progress"):
+    if not webhook_url:
+        return
+    try:
+        requests.post(webhook_url, json={"status": status, "message": message}, verify=False, timeout=5)
+    except:
+        pass
+
 def process_pdf_to_artifacts(
     pdf_source: str, 
     is_url: bool = True, 
@@ -356,6 +364,7 @@ def process_pdf_to_artifacts(
                 ai_rate_limit_fallback_count = 0
 
                 for page_num in range(len(doc)):
+                    _send_progress(webhook_url, f"Processing page {page_num + 1} of {len(doc)}...")
                     page = doc[page_num]
                     # Generate a high-res image for AI to analyze
                     mat = fitz.Matrix(3.0, 3.0)
@@ -435,11 +444,13 @@ def process_pdf_to_artifacts(
                                 # Set Title
                                 title_shape = slide.shapes.title
                                 title_shape.text = slide_data.get('title', f"Slide {page_num + 1}")
+                                title_shape.top = Inches(0.2)
+                                title_shape.height = Inches(0.8)
                                 _apply_aptos_narrow(title_shape)
                                 
                                 # Set Subtitle / Punchline
                                 left = Inches(0.5)
-                                top = Inches(1.2)
+                                top = Inches(1.1)
                                 width = Inches(8.0)
                                 height = Inches(0.5)
                                 txBox = slide.shapes.add_textbox(left, top, width, height)
@@ -452,6 +463,8 @@ def process_pdf_to_artifacts(
                                 
                                 # Set Bullets
                                 body_shape = slide.placeholders[1]
+                                body_shape.top = Inches(1.7)
+                                body_shape.height = Inches(5.0)
                                 tf = body_shape.text_frame
                                 tf.text = "" # clear default
                                 for bullet in slide_data.get('bullet_points', []):
@@ -462,7 +475,7 @@ def process_pdf_to_artifacts(
                                 
                                 # Add AI Generated Icon
                                 icon_keyword = slide_data.get('icon_keyword', 'presentation')
-                                icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}"
+                                icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}&backgroundColor=ffffff"
                                 try:
                                     icon_resp = requests.get(icon_url, verify=False, timeout=10)
                                     if icon_resp.status_code == 200:
@@ -898,6 +911,7 @@ def generate_artifacts_from_prompt(
             raise Exception("No valid GenAI or Anthropic API key configured.")
             
         if target_format.lower() == "pptx":
+            _send_progress(webhook_url, "Generating presentation outline with AI...")
             system_prompt = f"""You are an expert presentation designer.
 Create a {num_slides}-slide presentation outline on the following topic: {prompt}
 
@@ -943,6 +957,8 @@ Choose appropriate layout types (title_and_content, two_column).
                 bg_color = RGBColor(240, 248, 255)
                 text_color = RGBColor(10, 30, 60)
             
+            _send_progress(webhook_url, "Generating presentation slides...")
+            
             slides_data = data.get("slides", [])
             for i, s_data in enumerate(slides_data):
                 l_type = s_data.get('layout_type', 'title_and_content')
@@ -962,11 +978,13 @@ Choose appropriate layout types (title_and_content, two_column).
                 # Set Title
                 title_shape = slide.shapes.title
                 title_shape.text = s_data.get('title', f"Slide {i + 1}")
+                title_shape.top = Inches(0.2)
+                title_shape.height = Inches(0.8)
                 _apply_aptos_narrow(title_shape, font_color=text_color)
                 
                 # Set Subtitle / Punchline
                 left = Inches(0.5)
-                top = Inches(1.2)
+                top = Inches(1.1)
                 width = Inches(8.0)
                 height = Inches(0.5)
                 txBox = slide.shapes.add_textbox(left, top, width, height)
@@ -981,6 +999,8 @@ Choose appropriate layout types (title_and_content, two_column).
                 
                 # Set Bullets
                 body_shape = slide.placeholders[1]
+                body_shape.top = Inches(1.7)
+                body_shape.height = Inches(5.0)
                 tf = body_shape.text_frame
                 tf.text = "" # clear default
                 for bullet in s_data.get('bullet_points', []):
@@ -991,7 +1011,7 @@ Choose appropriate layout types (title_and_content, two_column).
                 
                 # Add AI Generated Icon
                 icon_keyword = s_data.get('icon_keyword', 'presentation')
-                icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}"
+                icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}&backgroundColor=ffffff"
                 try:
                     icon_resp = requests.get(icon_url, verify=False, timeout=10)
                     if icon_resp.status_code == 200:
@@ -1005,6 +1025,7 @@ Choose appropriate layout types (title_and_content, two_column).
             prs.save(output_path)
             
         else: # DOCX
+            _send_progress(webhook_url, "Generating document content with AI...")
             system_prompt = f"""You are an expert document author.
 Create a detailed, well-structured document on the following topic: {prompt}
 
