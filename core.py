@@ -684,9 +684,12 @@ def _get_file_url(execution_id: str, filename: str) -> str:
     
     if base_url == "file://":
         return f"file:///{file_path.replace(chr(92), '/')}"
-    else:
-        prefix = base_url.rstrip('/') if base_url else ""
+    elif base_url:
+        prefix = base_url.rstrip('/')
         return f"{prefix}/downloads/{execution_id}/{filename}"
+    else:
+        # Fallback absolute path if no BASE_URL is set (prevents sandbox issues locally if possible)
+        return f"http://127.0.0.1:8000/downloads/{execution_id}/{filename}"
 
 def generate_presentation(python_code: str, webhook_url: str = None) -> dict:
     """
