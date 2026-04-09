@@ -74,7 +74,31 @@ Whenever specifying themes, styles, or formats, the RAG agent MUST use one of th
 
 ---
 
-## 3. Response Schema Contract
+## 3. Strict Presentation Standardization Protocol
+
+The MCP Server implements a highly restrictive visual engine for all generated PPTX files. The RAG agent **must be aware** that the output will be strictly formatted according to these rules:
+
+1. **Slide Anatomy**:
+   - Every slide will consist of:
+     - `Title` (Top edge)
+     - `Narrative` (1-2 lines explaining the argument, right below the title)
+     - `Body/Visual Canvas` (Strictly bound in the center to prevent overflow)
+     - `Punchline` (Absolute bottom of the slide)
+2. **Slide Flow**:
+   - Decks automatically begin with a `title_slide` layout.
+   - The engine automatically handles `section_divider` layouts, ensuring cognitive breaks are visually distinct (no bullets/narratives).
+3. **Typography**:
+   - The engine exclusively uses **Aptos Narrow**.
+4. **Theming**:
+   - Only the 4 approved themes (`Dark Corporate`, `Modern Light`, `Pastel`, `Blue Accent`) will be executed.
+   - Backgrounds, elegant ribbons (headers/footers), and text colors dynamically adjust.
+   - The RAG agent should attempt to select one of these approved themes if the user does not specify one.
+5. **No Corporate Branding**:
+   - The presentation engine is generic. It does **not** inject "JPL", "JEMP", or any specific corporate branding into the slides. It remains entirely white-labeled.
+
+---
+
+## 4. Response Schema Contract
 
 Whether returned synchronously by the MCP Tool execution, or asynchronously via the `webhook_url` POST request, the JSON payload follows a strict schema.
 
