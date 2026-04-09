@@ -10,7 +10,7 @@ from datetime import datetime
 from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE
 from pptx.dml.color import RGBColor
 import fitz  # PyMuPDF
 from docx import Document as DocxDocument
@@ -31,15 +31,26 @@ logger = logging.getLogger("app")
 urllib3.disable_warnings()
 
 class SlideData(BaseModel):
-    title: str = Field(description="The main title for the slide")
-    narrative: str = Field(description="1-2 line explanatory narrative under the title, setting up the slide's argument.", default="")
+    title: str = Field(
+        description="Slide title: max ~10 words, single line when rendered (short headline)."
+    )
+    narrative: str = Field(
+        description="1-2 short lines only (under ~220 chars); must be longer/more prominent than bullets.",
+        default="",
+    )
     punchline: str = Field(description="One takeaway line; unique per slide, placed at the bottom.")
     key_takeaway: str = Field(description="A single powerful sentence summarizing the strategic impact or core takeaway of the slide.", default="Strategic growth driver.")
     layout_type: str = Field(
         description="title_slide | section_divider | index_slide | title_and_content | two_column | diagram"
     )
     slide_archetype: str = Field(description="Must be one of: title, agenda, divider, standard, table, deep_dive, roadmap, options", default="standard")
-    bullet_points: list[str] = Field(description="Maximum 3-5 bullet points. The main content extracted and summarized.")
+    bullet_points: list[str] = Field(
+        description="3-5 bullets; each bullet max ~120 chars — short lines for infographic rows beside icons."
+    )
+    bullet_icon_seeds: list[str] = Field(
+        default_factory=list,
+        description="One short English seed per bullet for DiceBear icons (same count as bullet_points when possible).",
+    )
     table_data: list[list[str]] = Field(description="2D array of strings for table/matrix slides. First row is headers.", default=[])
     icon_keyword: str = Field(description="A single keyword for the AI-generated icon (DiceBear) that acts as the slide diagram; required on content slides.")
     keep_original_image: bool = Field(description="Set to true if the original image contains important visual data like a chart, diagram, or photo that should be kept on the slide.")
@@ -245,6 +256,129 @@ def _apply_aptos_narrow(shape, font_color=None):
             run.font.name = 'Aptos Narrow'
             if font_color:
                 run.font.color.rgb = font_color
+
+
+# Prompt-generated deck: hierarchy title > narrative > punchline > bullets (never larger body than narrative)
+DECK_TITLE_PT = 22
+DECK_NARRATIVE_PT = 15
+DECK_PUNCHLINE_PT = 13
+DECK_BULLET_PT = 11
+DECK_TITLE_MAX_CHARS = 72
+
+
+def _truncate_one_line_title(text: str, max_chars: int = DECK_TITLE_MAX_CHARS) -> str:
+    t = (text or "").replace("\n", " ").strip()
+    if len(t) <= max_chars:
+        return t
+    cut = t[: max_chars - 1].rsplit(" ", 1)[0]
+    if len(cut) < max_chars // 2:
+        cut = t[: max_chars - 1]
+    return cut.rstrip() + "…"
+
+
+def _dicebear_icon_url(seed: str) -> str:
+    s = quote((seed or "visual").strip()[:80], safe="")
+    return f"https://api.dicebear.com/9.x/icons/png?seed={s}&backgroundColor=e8e8e8&size=256"
+
+
+def _download_dicebear_icon(seed: str, dest_path: str) -> bool:
+    try:
+        r = requests.get(_dicebear_icon_url(seed), verify=False, timeout=20)
+        if r.status_code != 200 or len(r.content) < 80:
+            logger.warning("DiceBear HTTP %s len=%s", r.status_code, len(r.content) if r.content else 0)
+            return False
+        with open(dest_path, "wb") as f:
+            f.write(r.content)
+        return True
+    except Exception as e:
+        logger.warning("DiceBear download failed: %s", e)
+    return False
+
+
+def _style_slide_title_shape(shape, raw_text: str, text_color: RGBColor, *, truncate: bool = True) -> None:
+    shape.text = _truncate_one_line_title(raw_text) if truncate else (raw_text or "").strip()
+    tf = shape.text_frame
+    tf.word_wrap = False
+    try:
+        tf.auto_size = MSO_AUTO_SIZE.NONE
+    except Exception:
+        pass
+    for p in tf.paragraphs:
+        p.alignment = PP_ALIGN.LEFT
+        p.font.size = Pt(DECK_TITLE_PT)
+        p.font.bold = True
+        p.font.color.rgb = text_color
+    _apply_aptos_narrow(shape, font_color=text_color)
+
+
+def _add_strict_content_slide_infographic(
+    slide,
+    s_data: dict,
+    run_dir: str,
+    slide_idx: int,
+    theme_colors: dict,
+    text_color: RGBColor,
+    theme_low: str,
+) -> None:
+    """Blank-layout slide: left-aligned title, narrative, infographic bullet rows (icon + text), punchline, hero icon."""
+    narrative_width = SLIDE_WIDTH - Inches(1.0) - Inches(1.38)
+    title_raw = s_data.get("title", f"Slide {slide_idx + 1}")
+    tit = slide.shapes.add_textbox(Inches(0.5), Inches(0.22), narrative_width, Inches(0.62))
+    _style_slide_title_shape(tit, title_raw, text_color, truncate=True)
+
+    nx = slide.shapes.add_textbox(Inches(0.5), Inches(0.92), narrative_width, Inches(0.55))
+    ntf = nx.text_frame
+    ntf.word_wrap = True
+    np = ntf.paragraphs[0]
+    np.text = (s_data.get("narrative") or "")[:520]
+    np.font.size = Pt(DECK_NARRATIVE_PT)
+    np.font.color.rgb = text_color
+    np.alignment = PP_ALIGN.LEFT
+    _apply_aptos_narrow(nx, font_color=text_color)
+
+    bullets = [b.strip() for b in (s_data.get("bullet_points") or []) if isinstance(b, str) and b.strip()][:5]
+    seeds_in = [str(x).strip() for x in (s_data.get("bullet_icon_seeds") or []) if str(x).strip()]
+    main_seed = (s_data.get("icon_keyword") or "insight").strip() or "insight"
+
+    row_top_in = 1.58
+    usable = 6.52 - row_top_in
+    nrows = max(1, len(bullets))
+    row_h_in = min(0.92, usable / min(nrows, 5)) if bullets else 0.9
+
+    for j, bullet in enumerate(bullets[:5]):
+        bt = row_top_in + j * row_h_in
+        seed = seeds_in[j] if j < len(seeds_in) else f"{main_seed}-{j + 1}"
+        ip = os.path.join(run_dir, f"row_icon_{slide_idx}_{j}.png")
+        if _download_dicebear_icon(seed, ip):
+            slide.shapes.add_picture(ip, Inches(0.48), Inches(bt), Inches(0.74), Inches(0.74))
+        tx = slide.shapes.add_textbox(
+            Inches(1.34),
+            Inches(bt + 0.02),
+            narrative_width - Inches(0.82),
+            Inches(max(0.36, row_h_in - 0.05)),
+        )
+        tf = tx.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.text = bullet[:380]
+        p.font.size = Pt(DECK_BULLET_PT)
+        p.font.color.rgb = text_color
+        p.alignment = PP_ALIGN.LEFT
+        _apply_aptos_narrow(tx, font_color=text_color)
+
+    px = slide.shapes.add_textbox(Inches(0.5), SLIDE_HEIGHT - Inches(0.82), SLIDE_WIDTH - Inches(1.0), Inches(0.42))
+    pr = px.text_frame.paragraphs[0]
+    pr.text = (s_data.get("punchline") or "")[:420]
+    pr.font.italic = True
+    pr.font.size = Pt(DECK_PUNCHLINE_PT)
+    pr.font.color.rgb = RGBColor(*theme_colors["subtext"])
+    pr.alignment = PP_ALIGN.LEFT
+    _apply_aptos_narrow(px, font_color=pr.font.color.rgb)
+
+    hero = os.path.join(run_dir, f"hero_icon_{slide_idx}.png")
+    if _download_dicebear_icon(main_seed, hero):
+        slide.shapes.add_picture(hero, Inches(10.95), Inches(0.28), Inches(1.38), Inches(1.38))
+
 
 @retry(
     stop=stop_after_attempt(5),
@@ -683,16 +817,9 @@ def process_pdf_to_artifacts(
                                 
                                 # Add AI Generated Icon
                                 icon_keyword = slide_data.get('icon_keyword', 'presentation')
-                                icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}&backgroundColor=ffffff"
-                                try:
-                                    icon_resp = requests.get(icon_url, verify=False, timeout=10)
-                                    if icon_resp.status_code == 200:
-                                        icon_path = os.path.join(run_dir, f"icon_{page_num}.png")
-                                        with open(icon_path, "wb") as f:
-                                            f.write(icon_resp.content)
-                                        slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
-                                except:
-                                    pass
+                                icon_path = os.path.join(run_dir, f"icon_{page_num}.png")
+                                if _download_dicebear_icon(icon_keyword, icon_path):
+                                    slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
                                     
                                 # If two column, or if AI indicated we should keep the image, put it in the right placeholder
                                 keep_image = slide_data.get('keep_original_image', False)
@@ -938,6 +1065,12 @@ def _validate_strict_content_slides(slides: list) -> list[str]:
         if not icon_kw:
             errors.append(f"Slide {i}: content slide requires icon_keyword for the AI-generated diagram/icon.")
 
+        if len(title) > 78:
+            errors.append(
+                f"Slide {i}: title is too long for a single-line layout; shorten to about 72 characters."
+            )
+
+        bullet_seeds = s.get("bullet_icon_seeds") or []
         if arch in ("table", "roadmap", "options") and table_data and len(table_data) >= 2:
             pass
         else:
@@ -947,6 +1080,13 @@ def _validate_strict_content_slides(slides: list) -> list[str]:
                     f"Slide {i}: content slide needs at least two substantive bullet points "
                     f"(or a populated table_data for table/roadmap/options slides)."
                 )
+            else:
+                n_seeds = len([x for x in bullet_seeds if str(x).strip()])
+                if n_seeds < len(non_empty_bullets):
+                    errors.append(
+                        f"Slide {i}: bullet_icon_seeds must include one non-empty seed per bullet "
+                        f"(infographic row icons); need {len(non_empty_bullets)}, have {n_seeds}."
+                    )
     return errors
 
 
@@ -957,10 +1097,9 @@ def _layout_regions_text_for_qa() -> str:
         "Regions for standard content slides: "
         "title box ~left 0.5 top 0.25 width ~12.83 height 0.8; "
         "narrative textbox ~left 0.5 top 0.95 width ~11.18 (right margin reserved for 1\" icon + gap); "
-        "body/bullets placeholder ~left 0.5 top 1.6 width ~11.18 (same as narrative, clears icon column) height 4.8; "
-        "punchline ~left 0.5 top ~6.7 width ~12.83 height 0.4; "
-        "AI icon (diagram) ~left 11.5 top 0.5 size 1.0 x 1.0. "
-        "Flag overlap if narrative or title text would intrude into the icon band (right side) or if punchline collides with body."
+        "content slides use infographic rows: small icon ~0.74in per bullet left column, bullet text to the right; "
+        "large hero icon ~top-right 1.38in; punchline at bottom. "
+        "Flag overlap or unreadable density if bullets are too long."
     )
 
 
@@ -1005,7 +1144,7 @@ CURRENT SLIDES JSON:
 {json.dumps(slides, indent=2)}
 
 Rules for content slides (not title_slide, section_divider, index_slide, and not archetypes title/agenda/divider):
-- Every such slide MUST have: non-empty title, narrative, punchline, icon_keyword (for AI icon diagram), and at least two bullet points OR valid table_data for table slides.
+- Every such slide MUST have: short single-line title (~72 chars max), concise narrative (~220 chars), punchline, icon_keyword, bullet_points (3-5 short bullets ~120 chars each), and bullet_icon_seeds with the SAME count as bullet_points (one icon seed per bullet for infographic rows).
 - Do not remove slides. Do not add slides. Fix fields only.
 
 Return ONLY JSON matching the PresentationData schema (top key \"slides\")."""
@@ -1551,6 +1690,7 @@ Requirements:
 - Choose layout_type per slide: title_slide (opening), section_divider (chapter breaks), index_slide (agenda/TOC if needed), title_and_content, two_column, or diagram as appropriate.
 - slide_archetype must match intent: title, agenda, divider, standard, table, deep_dive, roadmap, options.
 - For each slide, state purpose_one_line and visual_role (how the AI icon will reinforce the message).
+- Content slides are rendered as an infographic: one row per bullet with an AI icon — plan concise bullets (no long paragraphs).
 
 Deck flow: Context/Vision -> Execution -> Options -> Architecture -> Roadmap -> Risks -> Recommendation where applicable.
 Use neutral wording (no JPL/JEMP unless user asked)."""
@@ -1575,11 +1715,12 @@ STRICT VALIDATION RULES (Generic Presentation Kit):
 DO NOT brand with 'JPL', 'JEMP', or corporate tags unless the user asked. Use neutral terms.
 
 CONTENT SLIDES (all slides that are NOT title_slide, NOT section_divider, NOT index_slide, and NOT archetype title/agenda/divider) MUST EACH HAVE:
-1. title — non-empty
-2. narrative — non-empty (1-2 lines under the title)
-3. bullet_points — at least 2 substantive bullets OR, for table/roadmap/options archetypes, a proper table_data matrix
-4. icon_keyword — non-empty; this drives the AI-generated icon used as the slide's diagram/visual anchor (top-right)
-5. punchline — non-empty (one takeaway at the bottom)
+1. title — short headline only (about 10 words max, ~72 characters) so it stays on ONE line when rendered.
+2. narrative — non-empty; at most TWO short lines (~220 characters total); must feel more prominent than bullets.
+3. bullet_points — 3-5 bullets; EACH bullet max ~120 characters — terse, one idea per row (infographic layout).
+4. bullet_icon_seeds — REQUIRED: same number of entries as bullet_points; each a short English seed for a matching AI icon beside that bullet.
+5. icon_keyword — non-empty; also used for the large hero icon (top-right).
+6. punchline — non-empty (one takeaway at the bottom).
 
 NON-CONTENT SLIDES (title_slide, section_divider, index_slide, or archetypes title/agenda/divider): do not require the full five-part anatomy; keep them clean and readable.
 
@@ -1638,57 +1779,71 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
             theme_low = layout_theme.lower()
             
             _send_progress(webhook_url, "Building presentation file...")
-            
-            # Narrative/title column: reserve right band for 1 inch AI icon + gap (reduces overlap with icon)
-            narrative_width = SLIDE_WIDTH - Inches(1.0) - Inches(1.15)
+
             for i, s_data in enumerate(slides_data):
-                l_type = s_data.get('layout_type', 'title_and_content')
-                
-                if l_type == 'title_slide':
+                l_type = s_data.get("layout_type", "title_and_content")
+                is_strict = _is_strict_content_slide(s_data)
+
+                if l_type == "title_slide":
                     slide_layout = prs.slide_layouts[0]
-                elif l_type == 'section_divider':
+                elif l_type == "section_divider":
                     slide_layout = prs.slide_layouts[2]
-                elif l_type == 'two_column':
+                elif l_type == "index_slide":
+                    slide_layout = prs.slide_layouts[1]
+                elif is_strict:
+                    slide_layout = prs.slide_layouts[6]
+                elif l_type == "two_column":
                     slide_layout = prs.slide_layouts[3]
                 else:
                     slide_layout = prs.slide_layouts[1]
-                    
+
                 slide = prs.slides.add_slide(slide_layout)
-                
-                # Apply background color
-                background = slide.background
-                fill = background.fill
-                fill.solid()
-                fill.fore_color.rgb = bg_color
-                
-                # Apply theme ribbons
+                slide.background.fill.solid()
+                slide.background.fill.fore_color.rgb = bg_color
                 _apply_theme_ribbons(slide, prs, theme_colors)
-                
-                # Handle Title
-                if slide.shapes.title:
-                    title_shape = slide.shapes.title
-                    title_shape.text = s_data.get('title', f"Slide {i + 1}")
-                    
-                    if l_type not in ['title_slide', 'section_divider', 'index_slide']:
-                        title_shape.left = Inches(0.5)
-                        title_shape.top = Inches(0.25)
-                        title_shape.width = narrative_width if _is_strict_content_slide(s_data) else SLIDE_WIDTH - Inches(1.0)
-                        title_shape.height = Inches(0.8)
-                    
-                    _apply_aptos_narrow(title_shape, font_color=text_color)
-                
-                # Title and Divider specific formatting
-                if l_type in ['title_slide', 'section_divider']:
+
+                if l_type == "title_slide":
+                    if slide.shapes.title:
+                        _style_slide_title_shape(
+                            slide.shapes.title,
+                            s_data.get("title", f"Slide {i + 1}"),
+                            text_color,
+                            truncate=True,
+                        )
                     if len(slide.placeholders) > 1:
                         subtitle_shape = slide.placeholders[1]
-                        subtitle_text = s_data.get('narrative', '') or s_data.get('punchline', '')
-                        if subtitle_text:
-                            subtitle_shape.text = subtitle_text
-                            _apply_aptos_narrow(subtitle_shape, font_color=RGBColor(*theme_colors["subtext"]))
-                    continue # Skip narrative, punchline, bullets, icons for titles/dividers
+                        subtitle_shape.text = (s_data.get("narrative") or s_data.get("punchline") or "")[:650]
+                        for p in subtitle_shape.text_frame.paragraphs:
+                            p.font.size = Pt(DECK_NARRATIVE_PT)
+                            p.alignment = PP_ALIGN.LEFT
+                        _apply_aptos_narrow(subtitle_shape, font_color=RGBColor(*theme_colors["subtext"]))
+                    continue
 
-                # Index / agenda slide: title + bullet list only (no mandatory icon/narrative/punchline)
-                if l_type == 'index_slide':
+                if l_type == "section_divider":
+                    if slide.shapes.title:
+                        _style_slide_title_shape(
+                            slide.shapes.title,
+                            s_data.get("title", "Section"),
+                            text_color,
+                            truncate=True,
+                        )
+                    if len(slide.placeholders) > 1:
+                        subtitle_shape = slide.placeholders[1]
+                        subtitle_shape.text = (s_data.get("narrative") or s_data.get("punchline") or "")[:650]
+                        for p in subtitle_shape.text_frame.paragraphs:
+                            p.font.size = Pt(DECK_NARRATIVE_PT)
+                            p.alignment = PP_ALIGN.LEFT
+                        _apply_aptos_narrow(subtitle_shape, font_color=RGBColor(*theme_colors["subtext"]))
+                    continue
+
+                if l_type == "index_slide":
+                    if slide.shapes.title:
+                        _style_slide_title_shape(
+                            slide.shapes.title,
+                            s_data.get("title", "Agenda"),
+                            text_color,
+                            truncate=True,
+                        )
                     if len(slide.placeholders) > 1:
                         body_shape = slide.placeholders[1]
                         body_shape.left = Inches(0.5)
@@ -1698,46 +1853,49 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                         tf = body_shape.text_frame
                         tf.word_wrap = True
                         tf.text = ""
-                        for bullet in s_data.get('bullet_points', []) or []:
+                        for bullet in s_data.get("bullet_points", []) or []:
                             p = tf.add_paragraph()
                             p.text = bullet
                             p.level = 0
+                            p.font.size = Pt(DECK_BULLET_PT)
                         _apply_aptos_narrow(body_shape, font_color=text_color)
                     continue
 
-                # --- Standard Content Slides ---
-                
-                # Set Narrative
-                left = Inches(0.5)
-                top = Inches(0.95)
-                width = narrative_width
-                height = Inches(0.5)
-                txBox = slide.shapes.add_textbox(left, top, width, height)
-                tf = txBox.text_frame
-                tf.word_wrap = True
-                p = tf.add_paragraph()
-                p.text = s_data.get('narrative', '')
-                p.font.size = Pt(16)
-                p.font.color.rgb = text_color
-                _apply_aptos_narrow(txBox)
-                
-                # Set Punchline at bottom
-                left = Inches(0.5)
-                top = SLIDE_HEIGHT - Inches(0.8)
-                width = SLIDE_WIDTH - Inches(1.0)
-                height = Inches(0.4)
-                txBox_punch = slide.shapes.add_textbox(left, top, width, height)
-                tf_punch = txBox_punch.text_frame
-                p = tf_punch.add_paragraph()
-                p.text = s_data.get('punchline', '')
-                p.font.italic = True
-                p.font.size = Pt(14)
-                # Dim the punchline slightly relative to text color
-                if "dark" in theme_low: p.font.color.rgb = RGBColor(180, 180, 180)
-                else: p.font.color.rgb = RGBColor(100, 100, 100)
-                _apply_aptos_narrow(txBox_punch)
-                
-                # Set Bullets (width matches narrative — keeps text out of the top-right icon column)
+                if is_strict:
+                    _add_strict_content_slide_infographic(
+                        slide, s_data, run_dir, i, theme_colors, text_color, theme_low
+                    )
+                    continue
+
+                # Rare fallback: non-strict content slides (placeholder layout + hierarchy)
+                narrative_width = SLIDE_WIDTH - Inches(1.0) - Inches(1.15)
+                if slide.shapes.title:
+                    ts = slide.shapes.title
+                    ts.left = Inches(0.5)
+                    ts.top = Inches(0.25)
+                    ts.width = narrative_width
+                    ts.height = Inches(0.8)
+                    _style_slide_title_shape(ts, s_data.get("title", f"Slide {i + 1}"), text_color, truncate=True)
+
+                tx_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.95), narrative_width, Inches(0.5))
+                ntf = tx_box.text_frame
+                ntf.word_wrap = True
+                np = ntf.paragraphs[0]
+                np.text = s_data.get("narrative", "")
+                np.font.size = Pt(DECK_NARRATIVE_PT)
+                np.font.color.rgb = text_color
+                np.alignment = PP_ALIGN.LEFT
+                _apply_aptos_narrow(tx_box, font_color=text_color)
+
+                punch = slide.shapes.add_textbox(Inches(0.5), SLIDE_HEIGHT - Inches(0.8), SLIDE_WIDTH - Inches(1.0), Inches(0.4))
+                pp = punch.text_frame.paragraphs[0]
+                pp.text = s_data.get("punchline", "")
+                pp.font.italic = True
+                pp.font.size = Pt(DECK_PUNCHLINE_PT)
+                pp.font.color.rgb = RGBColor(*theme_colors["subtext"])
+                pp.alignment = PP_ALIGN.LEFT
+                _apply_aptos_narrow(punch, font_color=pp.font.color.rgb)
+
                 if len(slide.placeholders) > 1:
                     body_shape = slide.placeholders[1]
                     body_shape.left = Inches(0.5)
@@ -1746,31 +1904,21 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                     body_shape.height = Inches(4.8)
                     tf = body_shape.text_frame
                     tf.word_wrap = True
-                    tf.text = "" # clear default
-                    for bullet in s_data.get('bullet_points', []):
+                    tf.text = ""
+                    for bullet in s_data.get("bullet_points", []):
                         p = tf.add_paragraph()
                         p.text = bullet
                         p.level = 0
+                        p.font.size = Pt(DECK_BULLET_PT)
                     _apply_aptos_narrow(body_shape, font_color=text_color)
-                
-                # Add AI Generated Icon
-                icon_keyword = s_data.get('icon_keyword', 'presentation')
-                if icon_keyword:
-                    icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}&backgroundColor=ffffff"
-                    try:
-                        icon_resp = requests.get(icon_url, verify=False, timeout=10)
-                        if icon_resp.status_code == 200:
-                            icon_path = os.path.join(run_dir, f"icon_{i}.png")
-                            with open(icon_path, "wb") as f:
-                                f.write(icon_resp.content)
-                            slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
-                    except:
-                        pass
-                
-                # Two Column adjustment
-                if l_type == 'two_column' and len(slide.placeholders) > 2:
+
+                ik = (s_data.get("icon_keyword") or "presentation").strip()
+                ipath = os.path.join(run_dir, f"icon_fallback_{i}.png")
+                if _download_dicebear_icon(ik, ipath):
+                    slide.shapes.add_picture(ipath, Inches(11.0), Inches(0.35), Inches(1.2), Inches(1.2))
+
+                if l_type == "two_column" and len(slide.placeholders) > 2:
                     body_shape.width = (SLIDE_WIDTH / 2) - Inches(0.75)
-                    
                     right_body_shape = slide.placeholders[2]
                     right_body_shape.left = (SLIDE_WIDTH / 2) + Inches(0.25)
                     right_body_shape.top = Inches(1.6)
@@ -1780,7 +1928,7 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                     tf_right.word_wrap = True
                     tf_right.text = "Additional Context / Visuals"
                     _apply_aptos_narrow(right_body_shape, font_color=text_color)
-            
+
             prs.save(output_path)
             
         else: # DOCX
