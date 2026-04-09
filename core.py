@@ -19,6 +19,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 import urllib3
+from urllib.parse import quote
 import time
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 import logging
@@ -67,6 +68,85 @@ class VisualLayoutReviewResult(BaseModel):
     round_summary: str = Field(description="Brief summary of this review pass")
     issues: list[VisualQAItem] = Field(default_factory=list)
     suggested_fixes: list[str] = Field(description="Concrete fixes to apply to slide copy or structure", default_factory=list)
+
+
+class ImageTextBlock(BaseModel):
+    reading_order: int = Field(description="Order to read this block (1 = first)")
+    text: str = Field(description="Verbatim or cleaned text from this region")
+    region_hint: str = Field(
+        description="Spatial hint, e.g. top_title, left_column, diagram_label, callout, footer"
+    )
+
+
+class ImageLayoutAnalysisPhase1(BaseModel):
+    """Rich image-to-text: extract content and describe layout before rebuilding the slide."""
+    full_text_reading_order: str = Field(
+        description="All readable text in natural reading order, one block per line or paragraph"
+    )
+    extracted_text_blocks: list[ImageTextBlock] = Field(
+        description="Every distinct text region with position hints"
+    )
+    layout_description: str = Field(
+        description="Detailed description of how the slide looks: zones, alignment, columns, spacing, hierarchy"
+    )
+    diagram_structure: str = Field(
+        description="Faithful description of diagrams: boxes, arrows, flows, charts, connectors, grouping"
+    )
+    color_and_style_notes: str = Field(
+        default="",
+        description="Notable colors, emphasis, icons or photos visible",
+    )
+    visual_motifs_for_icons: list[str] = Field(
+        description="5-12 short English keywords for AI-generated icons matching motifs (shapes, metaphors) seen in the image",
+        default_factory=list,
+    )
+
+
+class TextBoxNorm(BaseModel):
+    """Editable text region; coordinates normalized 0-1 over the slide (origin top-left)."""
+    reading_order: int = Field(default=0)
+    left: float = Field(ge=0.0, le=1.0)
+    top: float = Field(ge=0.0, le=1.0)
+    width: float = Field(ge=0.0, le=1.0)
+    height: float = Field(ge=0.0, le=1.0)
+    text: str
+    font_emphasis: str = Field(
+        default="normal",
+        description="normal | bold | small_caption",
+    )
+
+
+class ImageToPptReconstruction(BaseModel):
+    """Structured spec to build an editable slide that mirrors the source image."""
+    title: str = Field(default="")
+    narrative: str = Field(default="")
+    punchline: str = Field(default="")
+    bullet_points: list[str] = Field(default_factory=list)
+    layout_type: str = Field(
+        default="title_and_content",
+        description="title_and_content | two_column | diagram",
+    )
+    icon_keyword: str = Field(
+        default="presentation",
+        description="Primary DiceBear icon seed aligned to the main visual metaphor",
+    )
+    extra_icon_keywords: list[str] = Field(
+        default_factory=list,
+        description="Additional icon seeds for secondary motifs (placed in a row)",
+    )
+    text_boxes: list[TextBoxNorm] = Field(
+        default_factory=list,
+        description="All text as separate editable boxes approximating positions from the image",
+    )
+    place_original_image_as_reference: bool = Field(
+        default=True,
+        description="If true, embed the source image in reference_image_box for diagram/chart fidelity",
+    )
+    reference_image_box: TextBoxNorm | None = Field(
+        default=None,
+        description="Where to place the source image; if null and place_original_image_as_reference, engine uses default right panel",
+    )
+
 
 class PresentationData(BaseModel):
     slides: list[SlideData] = Field(description="List of generated slides")
@@ -172,14 +252,14 @@ def _apply_aptos_narrow(shape, font_color=None):
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True
 )
-def _call_genai_with_retry(client, pil_img, prompt_text):
+def _call_genai_with_retry(client, pil_img, prompt_text, schema: type[BaseModel] = SlideData):
     try:
         return client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[pil_img, prompt_text],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                response_schema=SlideData,
+                response_schema=schema,
                 temperature=0.2
             ),
         )
@@ -196,11 +276,12 @@ def _call_genai_with_retry(client, pil_img, prompt_text):
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True
 )
-def _call_anthropic_with_retry(client, b64_img, prompt_text):
+def _call_anthropic_with_retry(client, b64_img, prompt_text, schema: type[BaseModel] = SlideData):
     try:
+        schema_hint = json.dumps(schema.model_json_schema(), indent=2)
         response = client.messages.create(
             model="claude-3-7-sonnet-20250219",
-            max_tokens=1024,
+            max_tokens=8192,
             temperature=0.2,
             messages=[
                 {
@@ -216,7 +297,7 @@ def _call_anthropic_with_retry(client, b64_img, prompt_text):
                         },
                         {
                             "type": "text",
-                            "text": prompt_text + "\n\nRespond ONLY with a valid JSON object matching the requested schema."
+                            "text": prompt_text + "\n\nRespond ONLY with a valid JSON object matching this schema:\n" + schema_hint
                         }
                     ]
                 }
@@ -262,12 +343,12 @@ def _call_anthropic_text_with_retry(client, prompt_text, schema):
     try:
         response = client.messages.create(
             model="claude-3-7-sonnet-20250219",
-            max_tokens=4000,
+            max_tokens=8192,
             temperature=0.4,
             messages=[
                 {
                     "role": "user",
-                    "content": prompt_text + f"\n\nRespond ONLY with a valid JSON object matching the requested schema:\n{schema.schema_json()}"
+                    "content": prompt_text + "\n\nRespond ONLY with a valid JSON object matching this schema:\n" + json.dumps(schema.model_json_schema(), indent=2)
                 }
             ]
         )
@@ -495,7 +576,7 @@ def process_pdf_to_artifacts(
                                 if has_anthropic:
                                     with open(img_path, "rb") as image_file:
                                         b64_img = base64.b64encode(image_file.read()).decode('utf-8')
-                                    prompt_text += f"\n\nJSON SCHEMA:\n{SlideData.schema_json()}"
+                                    prompt_text += f"\n\nJSON SCHEMA:\n{json.dumps(SlideData.model_json_schema(), indent=2)}"
                                     raw_text = _call_anthropic_with_retry(client, b64_img, prompt_text)
                                 else:
                                     pil_img = Image.open(img_path)
@@ -1049,98 +1130,357 @@ def generate_presentation(python_code: str, webhook_url: str = None) -> dict:
         _trigger_webhook(webhook_url, error_payload)
         return error_payload
 
-def image_to_presentation(image_source: str, is_url: bool = True, webhook_url: str = None) -> dict:
+def _norm_rect_to_inches(tb: TextBoxNorm):
+    """Map normalized 0-1 rectangle to slide inches (13.333 x 7.5)."""
+    l = max(0.0, min(1.0, tb.left))
+    t = max(0.0, min(1.0, tb.top))
+    w = max(0.02, min(1.0, tb.width))
+    h = max(0.02, min(1.0, tb.height))
+    return (
+        Inches(13.333 * l),
+        Inches(7.5 * t),
+        Inches(max(0.4, 13.333 * w)),
+        Inches(max(0.35, 7.5 * h)),
+    )
+
+
+def _build_presentation_from_image_reconstruction(
+    run_dir: str,
+    source_img_path: str,
+    recon: ImageToPptReconstruction,
+    layout_theme: str,
+) -> Presentation:
+    """Build one editable slide: optional reference image panel + text boxes + AI icons."""
+    prs, theme_colors = _create_themed_presentation(layout_theme)
+    blank_layout = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(blank_layout)
+
+    bg_color = RGBColor(*theme_colors["bg"])
+    text_color = RGBColor(*theme_colors["text"])
+    theme_low = layout_theme.lower()
+    slide.background.fill.solid()
+    slide.background.fill.fore_color.rgb = bg_color
+    _apply_theme_ribbons(slide, prs, theme_colors)
+
+    # Reference thumbnail of source (diagram fidelity)
+    if recon.place_original_image_as_reference and os.path.isfile(source_img_path):
+        ref = recon.reference_image_box
+        if ref is None:
+            ref = TextBoxNorm(
+                reading_order=-1,
+                left=0.52,
+                top=0.08,
+                width=0.46,
+                height=0.84,
+                text="",
+            )
+        rl, rt, rw, rh = _norm_rect_to_inches(ref)
+        try:
+            slide.shapes.add_picture(source_img_path, rl, rt, rw, rh)
+        except Exception as e:
+            logger.warning(f"Could not embed reference image: {e}")
+
+    # AI-generated icons (DiceBear), aligned to motifs from the image analysis
+    icon_seeds = []
+    if (recon.icon_keyword or "").strip():
+        icon_seeds.append(recon.icon_keyword.strip())
+    for k in recon.extra_icon_keywords or []:
+        k = (k or "").strip()
+        if k and k not in icon_seeds:
+            icon_seeds.append(k)
+    icon_seeds = icon_seeds[:8]
+
+    ref_on_right = bool(recon.place_original_image_as_reference)
+    for idx, seed in enumerate(icon_seeds):
+        icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={quote(str(seed), safe='')}&backgroundColor=ffffff"
+        try:
+            icon_resp = requests.get(icon_url, verify=False, timeout=15)
+            if icon_resp.status_code == 200:
+                icon_path = os.path.join(run_dir, f"img2ppt_icon_{idx}.png")
+                with open(icon_path, "wb") as f:
+                    f.write(icon_resp.content)
+                if ref_on_right:
+                    lx = Inches(0.45 + idx * 1.05)
+                    ly = Inches(0.42)
+                else:
+                    lx = Inches(11.2 - min(idx, 3) * 1.05)
+                    ly = Inches(0.45)
+                slide.shapes.add_picture(icon_path, lx, ly, Inches(0.95), Inches(0.95))
+        except Exception as e:
+            logger.warning(f"Icon fetch failed for {seed}: {e}")
+
+    # Editable text boxes (approximate positions from phase-2 reconstruction)
+    boxes = sorted(recon.text_boxes or [], key=lambda b: b.reading_order)
+    if not boxes and (recon.title or recon.narrative or recon.bullet_points):
+        # Minimal fallback layout
+        y = 0.12
+        if recon.title:
+            boxes.append(
+                TextBoxNorm(
+                    reading_order=1,
+                    left=0.05,
+                    top=y,
+                    width=0.9 if not ref_on_right else 0.45,
+                    height=0.1,
+                    text=recon.title,
+                    font_emphasis="bold",
+                )
+            )
+            y += 0.12
+        if recon.narrative:
+            boxes.append(
+                TextBoxNorm(
+                    reading_order=2,
+                    left=0.05,
+                    top=y,
+                    width=0.9 if not ref_on_right else 0.45,
+                    height=0.08,
+                    text=recon.narrative,
+                )
+            )
+            y += 0.1
+        for bi, bullet in enumerate(recon.bullet_points or []):
+            boxes.append(
+                TextBoxNorm(
+                    reading_order=10 + bi,
+                    left=0.05,
+                    top=min(0.72, y + bi * 0.07),
+                    width=0.9 if not ref_on_right else 0.45,
+                    height=0.07,
+                    text=f"• {bullet}",
+                )
+            )
+        if recon.punchline:
+            boxes.append(
+                TextBoxNorm(
+                    reading_order=900,
+                    left=0.05,
+                    top=0.88,
+                    width=0.9,
+                    height=0.08,
+                    text=recon.punchline,
+                    font_emphasis="small_caption",
+                )
+            )
+
+    sub_rgb = RGBColor(*theme_colors["subtext"])
+    for tb in boxes:
+        if not (tb.text or "").strip():
+            continue
+        left_i, top_i, width_i, height_i = _norm_rect_to_inches(tb)
+        try:
+            shape = slide.shapes.add_textbox(left_i, top_i, width_i, height_i)
+            tf = shape.text_frame
+            tf.word_wrap = True
+            tf.text = tb.text.strip()
+            p = tf.paragraphs[0]
+            if tb.font_emphasis == "bold":
+                p.font.bold = True
+                p.font.size = Pt(20)
+                p.font.color.rgb = text_color
+            elif tb.font_emphasis == "small_caption":
+                p.font.size = Pt(12)
+                p.font.italic = True
+                p.font.color.rgb = sub_rgb
+            else:
+                p.font.size = Pt(14)
+                p.font.color.rgb = text_color
+            _apply_aptos_narrow(shape, font_color=p.font.color.rgb)
+        except Exception as e:
+            logger.warning(f"Textbox add failed: {e}")
+
+    return prs
+
+
+def image_to_presentation(
+    image_source: str,
+    is_url: bool = True,
+    webhook_url: str = None,
+    api_key: str = "",
+    layout_theme: str = "Modern Light",
+) -> dict:
     """
-    Converts an image into a PPTX presentation with a single slide containing the image perfectly fitted.
-    image_source: URL, file path, or base64 string.
+    Image → rich text/layout analysis → editable PPTX with textboxes, AI icons, optional source image panel.
+    Without API keys, falls back to a single slide with the image fitted.
     """
     stats["requests_received"] += 1
     stats["last_request_time"] = datetime.now().isoformat()
-    
+
     execution_id = str(uuid.uuid4())
     run_dir = os.path.join(OUTPUT_DIR, execution_id)
     os.makedirs(run_dir, exist_ok=True)
-    
+
     try:
-        # Load image
         if is_url:
-            if image_source.startswith(('http://', 'https://')):
+            if image_source.startswith(("http://", "https://")):
                 response = requests.get(image_source, verify=False)
                 response.raise_for_status()
                 img = Image.open(BytesIO(response.content))
             else:
-                # Assume local file path or base64
                 if ";base64," in image_source:
-                    _, b64_data = image_source.split(";base64,")
+                    _, b64_data = image_source.split(";base64,", 1)
                     img = Image.open(BytesIO(base64.b64decode(b64_data)))
                 else:
                     img = Image.open(image_source)
         else:
-            # Direct base64 string without data URI scheme
             img = Image.open(BytesIO(base64.b64decode(image_source)))
-            
-        # Save image locally to temp file to be used by python-pptx
-        img_ext = img.format.lower() if img.format else "png"
+
+        img_ext = (img.format or "PNG").lower()
         if img_ext == "jpeg":
             img_ext = "jpg"
         img_path = os.path.join(run_dir, f"source_image.{img_ext}")
-        
-        # Convert RGBA to RGB for JPEG
-        if img.mode == 'RGBA' and img_ext in ['jpg', 'jpeg']:
-            img = img.convert('RGB')
-            
+        if img.mode == "RGBA" and img_ext in ("jpg", "jpeg"):
+            img = img.convert("RGB")
         img.save(img_path)
-        
-        # Create presentation
-        prs = Presentation()
-        prs.slide_width = SLIDE_WIDTH
-        prs.slide_height = SLIDE_HEIGHT
-        
-        blank_layout = prs.slide_layouts[6] # Blank layout
-        slide = prs.slides.add_slide(blank_layout)
-        
-        # Fit image to slide while preserving aspect ratio
-        img_width, img_height = img.size
-        page_aspect = img_width / img_height
-        slide_aspect = (SLIDE_WIDTH - 2 * MARGIN) / (SLIDE_HEIGHT - 2 * MARGIN)
-        
-        if page_aspect > slide_aspect:
-            width = SLIDE_WIDTH - 2 * MARGIN
-            height = width / page_aspect
+
+        # Vision APIs: prefer PNG for Anthropic
+        png_path = os.path.join(run_dir, "source_image_for_vision.png")
+        img.convert("RGBA" if img.mode in ("RGBA", "P") else "RGB").save(png_path, "PNG")
+        pil_for_gemini = Image.open(png_path)
+
+        has_genai = False
+        has_anthropic = False
+        client = None
+        use_anthropic = False
+        if api_key.startswith("sk-ant") or (
+            not api_key
+            and os.environ.get("ANTHROPIC_API_KEY")
+            and not os.environ.get("GEMINI_API_KEY")
+            and not os.environ.get("GOOGLE_API_KEY")
+        ):
+            use_anthropic = True
+        if use_anthropic:
+            try:
+                k = api_key if api_key else os.environ.get("ANTHROPIC_API_KEY")
+                proxy_url = os.environ.get("GCP_PROXY_FOR_CLAUD")
+                if proxy_url:
+                    client = anthropic.Anthropic(api_key=k, base_url=proxy_url, max_retries=0)
+                else:
+                    client = anthropic.Anthropic(api_key=k, max_retries=0)
+                has_anthropic = True
+            except Exception:
+                pass
         else:
-            height = SLIDE_HEIGHT - 2 * MARGIN
-            width = height * page_aspect
-            
-        left = (SLIDE_WIDTH - width) / 2 + MARGIN
-        top = (SLIDE_HEIGHT - height) / 2 + MARGIN
-        
-        slide.shapes.add_picture(img_path, left, top, width, height)
-        
+            try:
+                if api_key:
+                    client = genai.Client(api_key=api_key)
+                elif os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+                    client = genai.Client()
+                if client:
+                    has_genai = True
+            except Exception:
+                pass
+
+        if not (has_genai or has_anthropic):
+            _send_progress(webhook_url, "No AI client; embedding image only...")
+            prs = Presentation()
+            prs.slide_width = SLIDE_WIDTH
+            prs.slide_height = SLIDE_HEIGHT
+            blank_layout = prs.slide_layouts[6]
+            slide = prs.slides.add_slide(blank_layout)
+            img_width, img_height = img.size
+            page_aspect = img_width / img_height
+            slide_aspect = (SLIDE_WIDTH - 2 * MARGIN) / (SLIDE_HEIGHT - 2 * MARGIN)
+            if page_aspect > slide_aspect:
+                width = SLIDE_WIDTH - 2 * MARGIN
+                height = width / page_aspect
+            else:
+                height = SLIDE_HEIGHT - 2 * MARGIN
+                width = height * page_aspect
+            left = (SLIDE_WIDTH - width) / 2 + MARGIN
+            top = (SLIDE_HEIGHT - height) / 2 + MARGIN
+            slide.shapes.add_picture(img_path, left, top, width, height)
+            output_filename = "image_presentation.pptx"
+            output_path = os.path.join(run_dir, output_filename)
+            prs.save(output_path)
+            file_url = _get_file_url(execution_id, output_filename)
+            stats["successful_creations"] += 1
+            _add_to_history(execution_id, output_filename, file_url, "image_to_pptx")
+            response_payload = {
+                "success": True,
+                "message": "Image presentation generated (no API key: image embedded only). Add GEMINI_API_KEY or ANTHROPIC_API_KEY for full text + layout reconstruction.",
+                "file_url": file_url,
+                "download_path": f"/downloads/{execution_id}/{output_filename}",
+                "execution_id": execution_id,
+                "filename": output_filename,
+            }
+            _trigger_webhook(webhook_url, response_payload)
+            return response_payload
+
+        # --- Phase 1: meticulous image → text + layout description ---
+        _send_progress(webhook_url, "Phase 1: extracting text and describing layout from image...")
+        phase1_prompt = """You are an expert document and slide analyst. Perform a meticulous image-to-text and layout analysis.
+
+CRITICAL:
+1) Transcribe ALL visible text into full_text_reading_order and extracted_text_blocks (accurate wording; note region_hint for each block: e.g. top_title, left_column, diagram_label, legend, footer).
+2) layout_description: describe spatial layout — columns, headers, spacing, alignment, visual hierarchy.
+3) diagram_structure: describe diagrams faithfully — boxes, arrows, flows, charts, connectors, groupings (even if approximate).
+4) color_and_style_notes: bullets on emphasis, colors, photos vs drawings.
+5) visual_motifs_for_icons: 5-12 short English keywords for symbols/metaphors visible (used later for AI-generated icons matching the image).
+
+Be exhaustive; downstream steps rebuild editable slides from this analysis."""
+
+        if has_anthropic:
+            with open(png_path, "rb") as f:
+                b64_img = base64.b64encode(f.read()).decode("utf-8")
+            raw_p1 = _call_anthropic_with_retry(b64_img, phase1_prompt, ImageLayoutAnalysisPhase1)
+        else:
+            resp_p1 = _call_genai_with_retry(client, pil_for_gemini, phase1_prompt, ImageLayoutAnalysisPhase1)
+            raw_p1 = resp_p1.text.strip()
+
+        if raw_p1.startswith("```json"):
+            raw_p1 = raw_p1[7:]
+        elif raw_p1.startswith("```"):
+            raw_p1 = raw_p1[3:]
+        if raw_p1.rstrip().endswith("```"):
+            raw_p1 = raw_p1.rstrip()[:-3]
+        phase1 = ImageLayoutAnalysisPhase1.model_validate(json.loads(raw_p1.strip()))
+
+        # --- Phase 2: structured editable slide + icon seeds + text box geometry ---
+        _send_progress(webhook_url, "Phase 2: reconstructing editable slide, text boxes, and icon seeds...")
+        phase2_prompt = f"""You convert a completed Phase-1 image analysis into a structured editable PowerPoint specification.
+
+Rules:
+- Preserve ALL meaningful text from the analysis. Put verbatim copy into text_boxes with normalized coordinates (0-1 for full slide width/height, origin top-left). Approximate where each block sat in the image.
+- Also set title, narrative, punchline, bullet_points for a coherent speaker-friendly summary (content must remain consistent with extracted_text_blocks).
+- icon_keyword: best single seed for the main metaphor; extra_icon_keywords: more seeds from visual_motifs_for_icons (for DiceBear icons).
+- place_original_image_as_reference: true if charts, complex diagrams, or precise geometry must remain visible; then set reference_image_box OR leave null for default right-hand panel (52%-98% horizontal).
+- layout_type: diagram | two_column | title_and_content — semantic only (we use one slide with positioned boxes).
+
+PHASE 1 ANALYSIS JSON:
+{json.dumps(phase1.model_dump(), indent=2)}
+"""
+        recon_data = _llm_json_structured(client, use_anthropic, phase2_prompt, ImageToPptReconstruction)
+        recon = ImageToPptReconstruction.model_validate(recon_data)
+
+        _send_progress(webhook_url, "Building PowerPoint with text boxes and icons...")
+        prs = _build_presentation_from_image_reconstruction(run_dir, img_path, recon, layout_theme)
+
         output_filename = "image_presentation.pptx"
         output_path = os.path.join(run_dir, output_filename)
         prs.save(output_path)
-        
+
         file_url = _get_file_url(execution_id, output_filename)
-        
+
         stats["successful_creations"] += 1
         _add_to_history(execution_id, output_filename, file_url, "image_to_pptx")
-        
+
         response_payload = {
             "success": True,
-            "message": "Image presentation generated successfully.",
+            "message": "Image analyzed (text + layout), reconstructed with editable text boxes, AI icons, and optional source diagram panel.",
             "file_url": file_url,
             "download_path": f"/downloads/{execution_id}/{output_filename}",
             "execution_id": execution_id,
-            "filename": output_filename
+            "filename": output_filename,
         }
         _trigger_webhook(webhook_url, response_payload)
         return response_payload
-        
+
     except Exception as e:
         stats["failed_creations"] += 1
         error_payload = {
             "success": False,
-            "message": f"Error converting image to presentation: {str(e)}"
+            "message": f"Error converting image to presentation: {str(e)}",
         }
         _trigger_webhook(webhook_url, error_payload)
         return error_payload

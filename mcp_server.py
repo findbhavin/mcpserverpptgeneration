@@ -54,18 +54,34 @@ def generate_pptx(python_code: str, webhook_url: str = None) -> str:
     return json.dumps(result, indent=2)
 
 @mcp.tool()
-def image_to_pptx(image_source: str, is_url: bool = True, webhook_url: str = None) -> str:
+def image_to_pptx(
+    image_source: str,
+    is_url: bool = True,
+    webhook_url: str = None,
+    api_key: str = "",
+    layout_theme: str = "Modern Light",
+) -> str:
     """
-    Converts an image into a PPTX presentation with a single slide containing the image perfectly fitted.
+    Converts an image into an editable PPTX: vision extracts text and layout, then rebuilds the slide with
+    text boxes, AI icons (DiceBear) from image motifs, and an optional embedded copy of the source for diagram fidelity.
+    Without API keys, embeds the image full-bleed on one slide only.
     Args:
         image_source: URL, file path, or base64 string of the image.
         is_url: True if image_source is a URL or file path or data URI, False if it's a raw base64 string.
         webhook_url: Optional webhook URL to POST the JSON result to.
+        api_key: Optional Gemini or Anthropic API key (otherwise uses env vars).
+        layout_theme: Theme name for backgrounds/colors (e.g. Modern Light, Dark Corporate).
     Returns:
         A JSON string containing the 'success' boolean, 'message', and 'file_url'.
     """
     import json
-    result = image_to_presentation(image_source, is_url, webhook_url=webhook_url)
+    result = image_to_presentation(
+        image_source,
+        is_url,
+        webhook_url=webhook_url,
+        api_key=api_key or "",
+        layout_theme=layout_theme or "Modern Light",
+    )
     return json.dumps(result, indent=2)
 
 @mcp.tool()

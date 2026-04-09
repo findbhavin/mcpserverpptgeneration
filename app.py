@@ -58,6 +58,8 @@ class ImageRequest(BaseModel):
     image_source: str
     is_url: bool = True
     webhook_url: str = None
+    api_key: str = ""
+    layout_theme: str = "Modern Light"
 
 class DocxRequest(BaseModel):
     doc_source: str
@@ -692,7 +694,13 @@ async def api_generate(request: GenerateRequest):
 
 @app.post("/api/image-to-pptx")
 async def api_image_to_pptx(request: ImageRequest):
-    return image_to_presentation(request.image_source, request.is_url, request.webhook_url)
+    return image_to_presentation(
+        request.image_source,
+        request.is_url,
+        request.webhook_url,
+        api_key=request.api_key or "",
+        layout_theme=request.layout_theme or "Modern Light",
+    )
 
 @app.post("/api/format-docx")
 async def api_format_docx(request: DocxRequest):
