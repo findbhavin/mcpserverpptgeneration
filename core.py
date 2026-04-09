@@ -49,6 +49,80 @@ class DocumentData(BaseModel):
     title: str = Field(description="Document title")
     sections: list[SectionData] = Field(description="Document sections")
 
+THEMES = {
+    "dark corporate": {
+        "bg": (28, 30, 38),          # Deep slate grey background
+        "accent": (0, 161, 241),    # Vivid blue accent
+        "text": (245, 245, 245),    # Off-white text
+        "subtext": (170, 175, 185)  # Dimmed text
+    },
+    "modern light": {
+        "bg": (250, 252, 255),      # Crisp very-light blue/white
+        "accent": (230, 57, 70),    # Strong red accent
+        "text": (33, 37, 41),       # Almost black text
+        "subtext": (108, 117, 125)  # Grey subtext
+    },
+    "pastel": {
+        "bg": (245, 241, 237),      # Soft cream
+        "accent": (148, 201, 169),  # Mint green
+        "text": (73, 80, 87),       # Soft dark grey text
+        "subtext": (140, 145, 150)  # Lighter grey
+    },
+    "blue accent": {
+        "bg": (255, 255, 255),      # Pure white
+        "accent": (0, 80, 158),     # Navy blue
+        "text": (10, 25, 47),       # Very dark blue text
+        "subtext": (80, 90, 110)    # Mid blue-grey
+    }
+}
+
+def _get_theme_colors(theme_str: str):
+    t = theme_str.lower()
+    if "dark" in t: return THEMES["dark corporate"]
+    elif "pastel" in t: return THEMES["pastel"]
+    elif "blue" in t: return THEMES["blue accent"]
+    return THEMES["modern light"]
+
+def _create_themed_presentation(theme_str: str):
+    """
+    Creates a new Presentation() and injects a robust, stylish layout template 
+    into the master slide so every slide inherits a consistent, beautiful design.
+    """
+    prs = Presentation()
+    prs.slide_width = SLIDE_WIDTH
+    prs.slide_height = SLIDE_HEIGHT
+    
+    colors = _get_theme_colors(theme_str)
+    bg_color = RGBColor(*colors["bg"])
+    accent_color = RGBColor(*colors["accent"])
+    
+    # Apply to Slide Master so it inherits everywhere
+    master = prs.slide_master
+    
+    # 1. Set solid background
+    master.background.fill.solid()
+    master.background.fill.fore_color.rgb = bg_color
+    
+    # 2. Add an elegant accent ribbon at the very top (header)
+    top_ribbon = master.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, 
+        0, 0, prs.slide_width, Inches(0.15)
+    )
+    top_ribbon.fill.solid()
+    top_ribbon.fill.fore_color.rgb = accent_color
+    top_ribbon.line.fill.background() # No border
+    
+    # 3. Add an elegant accent ribbon at the bottom (footer)
+    bottom_ribbon = master.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, 
+        0, prs.slide_height - Inches(0.3), prs.slide_width, Inches(0.3)
+    )
+    bottom_ribbon.fill.solid()
+    bottom_ribbon.fill.fore_color.rgb = accent_color
+    bottom_ribbon.line.fill.background()
+    
+    return prs, colors
+
 def _apply_aptos_narrow(shape, font_color=None):
     if not hasattr(shape, 'text_frame'):
         return
@@ -312,9 +386,7 @@ def process_pdf_to_artifacts(
                 output_filename = "converted_presentation.pptx"
                 output_path = os.path.join(run_dir, output_filename)
                 
-                prs = Presentation()
-                prs.slide_width = SLIDE_WIDTH
-                prs.slide_height = SLIDE_HEIGHT
+                prs, theme_colors = _create_themed_presentation(layout_theme)
                 
                 # Add an instructions slide to pass metadata or indicate rules
                 if instructions or layout_theme or visual_iconography or slide_content_rules:
@@ -444,13 +516,13 @@ def process_pdf_to_artifacts(
                                 # Set Title
                                 title_shape = slide.shapes.title
                                 title_shape.text = slide_data.get('title', f"Slide {page_num + 1}")
-                                title_shape.top = Inches(0.2)
+                                title_shape.top = Inches(0.25)
                                 title_shape.height = Inches(0.8)
-                                _apply_aptos_narrow(title_shape)
+                                _apply_aptos_narrow(title_shape, font_color=RGBColor(*theme_colors["text"]))
                                 
                                 # Set Subtitle / Punchline
                                 left = Inches(0.5)
-                                top = Inches(1.1)
+                                top = Inches(1.15)
                                 width = Inches(8.0)
                                 height = Inches(0.5)
                                 txBox = slide.shapes.add_textbox(left, top, width, height)
@@ -458,12 +530,12 @@ def process_pdf_to_artifacts(
                                 p = tf.add_paragraph()
                                 p.text = slide_data.get('punchline', '')
                                 p.font.italic = True
-                                p.font.color.rgb = RGBColor(100, 100, 100)
+                                p.font.color.rgb = RGBColor(*theme_colors["subtext"])
                                 _apply_aptos_narrow(txBox)
                                 
                                 # Set Bullets
                                 body_shape = slide.placeholders[1]
-                                body_shape.top = Inches(1.7)
+                                body_shape.top = Inches(1.8)
                                 body_shape.height = Inches(5.0)
                                 tf = body_shape.text_frame
                                 tf.text = "" # clear default
@@ -471,7 +543,7 @@ def process_pdf_to_artifacts(
                                     p = tf.add_paragraph()
                                     p.text = bullet
                                     p.level = 0
-                                _apply_aptos_narrow(body_shape)
+                                _apply_aptos_narrow(body_shape, font_color=RGBColor(*theme_colors["text"]))
                                 
                                 # Add AI Generated Icon
                                 icon_keyword = slide_data.get('icon_keyword', 'presentation')
@@ -490,9 +562,11 @@ def process_pdf_to_artifacts(
                                 keep_image = slide_data.get('keep_original_image', False)
                                 if (l_type == 'two_column' or keep_image) and len(slide.placeholders) > 2:
                                     right_body_shape = slide.placeholders[2]
+                                    right_body_shape.top = Inches(1.8)
+                                    right_body_shape.height = Inches(5.0)
                                     tf_right = right_body_shape.text_frame
                                     tf_right.text = "Original Context"
-                                    _apply_aptos_narrow(right_body_shape)
+                                    _apply_aptos_narrow(right_body_shape, font_color=RGBColor(*theme_colors["text"]))
                                     
                                     # Insert the original image overlapping the placeholder slightly
                                     slide.shapes.add_picture(
@@ -566,6 +640,7 @@ def process_pdf_to_artifacts(
             "success": True,
             "message": msg,
             "file_url": file_url,
+            "download_path": f"/downloads/{execution_id}/{output_filename}",
             "execution_id": execution_id,
             "filename": output_filename
         }
@@ -626,6 +701,7 @@ def process_pdf_to_artifacts(
             "success": True,
             "message": "Document formatted successfully.",
             "file_url": file_url,
+            "download_path": f"/downloads/{execution_id}/{output_filename}",
             "execution_id": execution_id,
             "filename": output_filename
         }
@@ -688,8 +764,8 @@ def _get_file_url(execution_id: str, filename: str) -> str:
         prefix = base_url.rstrip('/')
         return f"{prefix}/downloads/{execution_id}/{filename}"
     else:
-        # Fallback absolute path if no BASE_URL is set (prevents sandbox issues locally if possible)
-        return f"http://127.0.0.1:8000/downloads/{execution_id}/{filename}"
+        # Fallback absolute path if no BASE_URL is set
+        return f"http://localhost:8000/downloads/{execution_id}/{filename}"
 
 def generate_presentation(python_code: str, webhook_url: str = None) -> dict:
     """
@@ -742,6 +818,7 @@ def generate_presentation(python_code: str, webhook_url: str = None) -> dict:
             "success": True,
             "message": "Presentation generated successfully.",
             "file_url": file_url,
+            "download_path": f"/downloads/{execution_id}/{pptx_files[0]}",
             "execution_id": execution_id,
             "filename": pptx_files[0]
         }
@@ -845,6 +922,7 @@ def image_to_presentation(image_source: str, is_url: bool = True, webhook_url: s
             "success": True,
             "message": "Image presentation generated successfully.",
             "file_url": file_url,
+            "download_path": f"/downloads/{execution_id}/{output_filename}",
             "execution_id": execution_id,
             "filename": output_filename
         }
@@ -949,16 +1027,23 @@ Choose appropriate layout types (title_and_content, two_column).
             # Theme parsing
             bg_color = RGBColor(255, 255, 255)
             text_color = RGBColor(0, 0, 0)
+            header_bg_color = RGBColor(0, 51, 102) # Default dark blue
+            header_text_color = RGBColor(255, 255, 255)
+            
             theme_low = layout_theme.lower()
             if "dark" in theme_low:
                 bg_color = RGBColor(30, 30, 30)
                 text_color = RGBColor(250, 250, 250)
+                header_bg_color = RGBColor(60, 60, 60)
             elif "pastel" in theme_low:
                 bg_color = RGBColor(245, 245, 250)
                 text_color = RGBColor(50, 50, 50)
+                header_bg_color = RGBColor(176, 196, 222)
+                header_text_color = RGBColor(0, 0, 0)
             elif "blue" in theme_low:
                 bg_color = RGBColor(240, 248, 255)
                 text_color = RGBColor(10, 30, 60)
+                header_bg_color = RGBColor(70, 130, 180)
             
             _send_progress(webhook_url, "Generating presentation slides...")
             
@@ -1080,6 +1165,7 @@ Theme/Tone: {layout_theme}
             "success": True,
             "message": f"Successfully generated {target_format.upper()} from prompt.",
             "file_url": file_url,
+            "download_path": f"/downloads/{execution_id}/{output_filename}",
             "execution_id": execution_id,
             "filename": output_filename
         }

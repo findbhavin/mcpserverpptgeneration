@@ -22,7 +22,31 @@ Right now, the RAG framework calls the MCP Server, gets the JSON result, and imm
 ## The Solution
 You must **intercept** the `file_url` from the MCP response, force Claude to use it, OR bypass Claude entirely and render a direct download button in the chat UI.
 
-### Option 1: Force Claude to use the exact URL (Prompt Injection)
+### Option 1: Provide the download_path back to the frontend
+
+The MCP Server now responds with an explicit `download_path` field (e.g., `/downloads/execution_id/filename.pptx`).
+Since your RAG agent already knows the `MCP_URL` it uses to connect to the MCP server, you can dynamically construct the absolute, reliable download URL directly in your RAG code, entirely bypassing Claude's output.
+
+### Python Example:
+
+```python
+# Assuming you called an MCP tool and got this response string:
+# '{"success": true, "file_url": "...", "download_path": "/downloads/abc-123/file.pptx", "execution_id": "..."}'
+
+import json
+mcp_response = json.loads(tool_result_string)
+
+# The base URL your RAG agent uses to connect to the MCP server
+MCP_BASE_URL = "https://mcpserverpptgeneration-707676665280.europe-west1.run.app"
+
+if mcp_response.get("success") and "download_path" in mcp_response:
+    reliable_url = f"{MCP_BASE_URL}{mcp_response['download_path']}"
+    
+    # Render this link directly in the chat UI
+    st.markdown(f"**Success!** Download your presentation here: [Download PPTX]({reliable_url})")
+```
+
+## Option 2: Force Claude to use the exact URL via prompt injection
 When you send the `tool_result` back to Claude, append explicit instructions telling it exactly how to format the Markdown link using the real `file_url`.
 
 **Modify the RAG Python code where it handles the MCP HTTP response:**

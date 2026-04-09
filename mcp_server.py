@@ -160,7 +160,8 @@ def get_capabilities() -> str:
         "interaction_guidelines": [
             "Use webhook_url for long-running generation tasks to get asynchronous results.",
             "Base64 or public URLs are supported for file inputs.",
-            "When using process_pdf or generate_from_prompt, explicitly passing api_key is recommended if the server is not pre-configured with them."
+            "When using process_pdf or generate_from_prompt, explicitly passing api_key is recommended if the server is not pre-configured with them.",
+            "CRITICAL: To download files, the RAG agent MUST append the 'download_path' to the known MCP server URL rather than relying solely on 'file_url', as LLMs may hallucinate local paths like 'sandbox:/mnt/data/'."
         ]
     }
     return json.dumps(capabilities, indent=2)
