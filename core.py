@@ -35,7 +35,9 @@ class SlideData(BaseModel):
     punchline: str = Field(description="One takeaway line; unique per slide, placed at the bottom.")
     key_takeaway: str = Field(description="A single powerful sentence summarizing the strategic impact or core takeaway of the slide.", default="Strategic growth driver.")
     layout_type: str = Field(description="One of: title_and_content, two_column, diagram")
-    bullet_points: list[str] = Field(description="The main content points extracted and summarized")
+    slide_archetype: str = Field(description="Must be one of: title, agenda, divider, standard, table, deep_dive, roadmap, options", default="standard")
+    bullet_points: list[str] = Field(description="Maximum 3-5 bullet points. The main content extracted and summarized.")
+    table_data: list[list[str]] = Field(description="2D array of strings for table/matrix slides. First row is headers.", default=[])
     icon_keyword: str = Field(description="A single keyword to search for an icon representing the slide's intent")
     keep_original_image: bool = Field(description="Set to true if the original image contains important visual data like a chart, diagram, or photo that should be kept on the slide.")
 
@@ -1023,16 +1025,33 @@ def generate_artifacts_from_prompt(
         if not (has_genai or has_anthropic):
             raise Exception("No valid GenAI or Anthropic API key configured.")
             
-        if target_format.lower() == "pptx":
-            _send_progress(webhook_url, "Generating presentation outline with AI...")
-            system_prompt = f"""You are an expert presentation designer.
+    if target_format.lower() == "pptx":
+        # AI prompt strictly enforcing the Presentation Creation Kit anatomy
+        _send_progress(webhook_url, "Generating presentation outline with AI...")
+        system_prompt = f"""You are an expert presentation designer and strategic consultant.
 Create a {num_slides}-slide presentation outline on the following topic: {prompt}
 
 Presentation Style Constraint: {presentation_style}
 Theme Concept: {layout_theme}
 
-Write punchlines and bullet points that match the style (e.g. if 'Abstract' or 'Minimalist', use few words. If 'Detailed', use comprehensive bullets).
-Choose appropriate layout types (title_and_content, two_column).
+STRICT SLIDE ANATOMY (Generic Presentation Kit):
+DO NOT brand this presentation with 'JPL', 'JEMP', or specific corporate tags unless explicitly requested by the user. Use neutral terms like 'The Organization' or 'The Platform'.
+
+Each slide MUST be structured according to this strict contract:
+1. Title: A concise, impactful title.
+2. Narrative: A 1-2 line explanatory narrative setting up the slide's argument.
+3. Content/Visual: Provide 3-5 max bullet points with parallel grammar. Do not exceed 5 bullets.
+4. Archetypes: Assign a `slide_archetype` (title, agenda, divider, standard, table, deep_dive, roadmap, options).
+5. For 'table', 'roadmap', or 'options', provide `table_data` as a 2D array of strings where the first row is headers.
+6. Punchline: A single takeaway line summarizing the strategic impact. Unique per slide.
+
+DECK STRUCTURE & STORYTELLING:
+- Storyline Flow: Context/Vision -> Execution Model (Tracks/Phases) -> Options -> Architecture -> Roadmap -> Risks -> Recommendation.
+- Define terms clearly (e.g., Track = enduring workstream; Project = deliverable).
+- No filler slides: every slide answers a question. Density over page-count chasing.
+- For comparisons/options, use the 'table' archetype to matrix the options against criteria.
+
+Write the output in the JSON format matching this schema:
 """
             if use_anthropic:
                 raw_text = _call_anthropic_text_with_retry(client, system_prompt, PresentationData)
@@ -1052,51 +1071,49 @@ Choose appropriate layout types (title_and_content, two_column).
             output_filename = "generated_presentation.pptx"
             output_path = os.path.join(run_dir, output_filename)
             
-            prs = Presentation()
-            prs.slide_width = SLIDE_WIDTH
-            prs.slide_height = SLIDE_HEIGHT
-            
-            # Theme parsing
-            bg_color = RGBColor(255, 255, 255)
-            text_color = RGBColor(0, 0, 0)
-            header_bg_color = RGBColor(0, 51, 102) # Default dark blue
-            header_text_color = RGBColor(255, 255, 255)
-            
-            theme_low = layout_theme.lower()
-            if "dark" in theme_low:
-                bg_color = RGBColor(30, 30, 30)
-                text_color = RGBColor(250, 250, 250)
-                header_bg_color = RGBColor(60, 60, 60)
-            elif "pastel" in theme_low:
-                bg_color = RGBColor(245, 245, 250)
-                text_color = RGBColor(50, 50, 50)
-                header_bg_color = RGBColor(176, 196, 222)
-                header_text_color = RGBColor(0, 0, 0)
-            elif "blue" in theme_low:
-                bg_color = RGBColor(240, 248, 255)
-                text_color = RGBColor(10, 30, 60)
-                header_bg_color = RGBColor(70, 130, 180)
+            prs, theme_colors = _create_themed_presentation(layout_theme)
             
             _send_progress(webhook_url, "Generating presentation slides...")
             
             slides_data = data.get("slides", [])
             for i, s_data in enumerate(slides_data):
                 l_type = s_data.get('layout_type', 'title_and_content')
+                archetype = s_data.get('slide_archetype', 'standard')
+                
+                # Title Slide Archetype
+                if archetype == 'title':
+                    slide_layout = prs.slide_layouts[0] # Title layout
+                    slide = prs.slides.add_slide(slide_layout)
+                    slide.shapes.title.text = s_data.get('title', 'Presentation')
+                    _apply_aptos_narrow(slide.shapes.title, font_color=RGBColor(*theme_colors["text"]))
+                    if len(slide.placeholders) > 1:
+                        subtitle = slide.placeholders[1]
+                        subtitle.text = s_data.get('narrative', '') + "\n" + s_data.get('punchline', '')
+                        _apply_aptos_narrow(subtitle, font_color=RGBColor(*theme_colors["subtext"]))
+                    continue
+                    
+                # Section Divider Archetype
+                if archetype == 'divider':
+                    slide_layout = prs.slide_layouts[6] # Blank
+                    slide = prs.slides.add_slide(slide_layout)
+                    # Center huge text
+                    txBox = slide.shapes.add_textbox(Inches(1), Inches(3), SLIDE_WIDTH - Inches(2), Inches(1.5))
+                    tf = txBox.text_frame
+                    p = tf.add_paragraph()
+                    p.text = s_data.get('title', 'Section')
+                    p.font.size = Pt(44)
+                    p.font.bold = True
+                    p.font.color.rgb = RGBColor(*theme_colors["text"])
+                    p.alignment = PP_ALIGN.CENTER
+                    _apply_aptos_narrow(txBox)
+                    continue
+
                 if l_type == 'two_column':
                     slide_layout = prs.slide_layouts[3]
                 else:
                     slide_layout = prs.slide_layouts[1]
                     
                 slide = prs.slides.add_slide(slide_layout)
-                
-                # Apply background color
-                background = slide.background
-                fill = background.fill
-                fill.solid()
-                fill.fore_color.rgb = bg_color
-                
-                # Apply theme ribbons
-                _apply_theme_ribbons(slide, prs, theme_colors)
                 
                 # Set Title
                 title_shape = slide.shapes.title
@@ -1105,7 +1122,7 @@ Choose appropriate layout types (title_and_content, two_column).
                 title_shape.top = Inches(0.25)
                 title_shape.width = SLIDE_WIDTH - Inches(1.0)
                 title_shape.height = Inches(0.8)
-                _apply_aptos_narrow(title_shape, font_color=text_color)
+                _apply_aptos_narrow(title_shape, font_color=RGBColor(*theme_colors["text"]))
                 
                 # Set Narrative
                 left = Inches(0.5)
@@ -1118,7 +1135,7 @@ Choose appropriate layout types (title_and_content, two_column).
                 p = tf.add_paragraph()
                 p.text = s_data.get('narrative', '')
                 p.font.size = Pt(16)
-                p.font.color.rgb = text_color
+                p.font.color.rgb = RGBColor(*theme_colors["text"])
                 _apply_aptos_narrow(txBox)
                 
                 # Set Punchline at bottom
@@ -1132,12 +1149,35 @@ Choose appropriate layout types (title_and_content, two_column).
                 p.text = s_data.get('punchline', '')
                 p.font.italic = True
                 p.font.size = Pt(14)
-                # Dim the punchline slightly relative to text color
-                if "dark" in theme_low: p.font.color.rgb = RGBColor(180, 180, 180)
-                else: p.font.color.rgb = RGBColor(100, 100, 100)
+                p.font.color.rgb = RGBColor(*theme_colors["subtext"])
                 _apply_aptos_narrow(txBox_punch)
                 
-                # Set Bullets
+                # Render Table if archetype matches and data exists
+                if archetype in ['table', 'roadmap', 'options'] and s_data.get('table_data'):
+                    table_data = s_data.get('table_data')
+                    rows = len(table_data)
+                    cols = len(table_data[0]) if rows > 0 else 0
+                    if rows > 0 and cols > 0:
+                        # Clear default text box
+                        slide.placeholders[1].text_frame.text = ""
+                        # Add Table
+                        table_shape = slide.shapes.add_table(rows, cols, Inches(0.5), Inches(1.6), SLIDE_WIDTH - Inches(1.0), Inches(4.5))
+                        table = table_shape.table
+                        for r_idx, row_data in enumerate(table_data):
+                            for c_idx, cell_value in enumerate(row_data):
+                                if c_idx < cols:
+                                    cell = table.cell(r_idx, c_idx)
+                                    cell.text = str(cell_value)
+                                    _apply_aptos_narrow(cell.text_frame, font_color=RGBColor(*theme_colors["text"]))
+                                    if r_idx == 0: # Header
+                                        cell.fill.solid()
+                                        cell.fill.fore_color.rgb = RGBColor(*theme_colors["accent"])
+                                        for paragraph in cell.text_frame.paragraphs:
+                                            paragraph.font.color.rgb = RGBColor(255,255,255)
+                                            paragraph.font.bold = True
+                    continue
+                    
+                # Otherwise, Standard Bullets
                 body_shape = slide.placeholders[1]
                 body_shape.left = Inches(0.5)
                 body_shape.top = Inches(1.6)
@@ -1150,7 +1190,7 @@ Choose appropriate layout types (title_and_content, two_column).
                     p = tf.add_paragraph()
                     p.text = bullet
                     p.level = 0
-                _apply_aptos_narrow(body_shape, font_color=text_color)
+                _apply_aptos_narrow(body_shape, font_color=RGBColor(*theme_colors["text"]))
                 
                 # Add AI Generated Icon
                 icon_keyword = s_data.get('icon_keyword', 'presentation')
@@ -1230,11 +1270,18 @@ Choose appropriate layout types (title_and_content, two_column).
             
         else: # DOCX
             _send_progress(webhook_url, "Generating document content with AI...")
-            system_prompt = f"""You are an expert document author.
+            system_prompt = f"""You are an expert document author and strategic consultant.
 Create a detailed, well-structured document on the following topic: {prompt}
 
 Document Style Constraint: {presentation_style}
 Theme/Tone: {layout_theme}
+
+STRICT DOCUMENT ORGANIZATION (The Formatting Kit):
+1. Introduction: Must explain what the document is and how sections are organized. Outline the roadmap at a section level.
+2. Structure: Follow a logical order (e.g., Vision -> Execution/Tracks -> Architecture/Options -> Details).
+3. Clarity: Separate Projects (what you build) from Tracks (how you execute). Include comparative analysis where options are discussed.
+4. Formatting: The document must be well organized into headings, content paragraphs, and bullet points where useful for scanning.
+5. Depth: Do not drop content, only add. Avoid padding just to hit a page count.
 """
             if use_anthropic:
                 raw_text = _call_anthropic_text_with_retry(client, system_prompt, DocumentData)
