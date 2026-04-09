@@ -515,8 +515,9 @@ def process_pdf_to_artifacts(
                                 
                                 # Set Title
                                 title_shape = slide.shapes.title
-                                title_shape.text = slide_data.get('title', f"Slide {page_num + 1}")
+                                title_shape.left = Inches(0.5)
                                 title_shape.top = Inches(0.25)
+                                title_shape.width = SLIDE_WIDTH - Inches(1.0)
                                 title_shape.height = Inches(0.8)
                                 _apply_aptos_narrow(title_shape, font_color=RGBColor(*theme_colors["text"]))
                                 
@@ -535,9 +536,12 @@ def process_pdf_to_artifacts(
                                 
                                 # Set Bullets
                                 body_shape = slide.placeholders[1]
+                                body_shape.left = Inches(0.5)
                                 body_shape.top = Inches(1.8)
+                                body_shape.width = SLIDE_WIDTH - Inches(1.0)
                                 body_shape.height = Inches(5.0)
                                 tf = body_shape.text_frame
+                                tf.word_wrap = True
                                 tf.text = "" # clear default
                                 for bullet in slide_data.get('bullet_points', []):
                                     p = tf.add_paragraph()
@@ -561,10 +565,16 @@ def process_pdf_to_artifacts(
                                 # If two column, or if AI indicated we should keep the image, put it in the right placeholder
                                 keep_image = slide_data.get('keep_original_image', False)
                                 if (l_type == 'two_column' or keep_image) and len(slide.placeholders) > 2:
+                                    # Adjust left body shape to be half width
+                                    body_shape.width = (SLIDE_WIDTH / 2) - Inches(0.75)
+                                    
                                     right_body_shape = slide.placeholders[2]
+                                    right_body_shape.left = (SLIDE_WIDTH / 2) + Inches(0.25)
                                     right_body_shape.top = Inches(1.8)
+                                    right_body_shape.width = (SLIDE_WIDTH / 2) - Inches(0.75)
                                     right_body_shape.height = Inches(5.0)
                                     tf_right = right_body_shape.text_frame
+                                    tf_right.word_wrap = True
                                     tf_right.text = "Original Context"
                                     _apply_aptos_narrow(right_body_shape, font_color=RGBColor(*theme_colors["text"]))
                                     
@@ -1066,17 +1076,20 @@ Choose appropriate layout types (title_and_content, two_column).
                 # Set Title
                 title_shape = slide.shapes.title
                 title_shape.text = s_data.get('title', f"Slide {i + 1}")
-                title_shape.top = Inches(0.2)
+                title_shape.left = Inches(0.5)
+                title_shape.top = Inches(0.25)
+                title_shape.width = SLIDE_WIDTH - Inches(1.0)
                 title_shape.height = Inches(0.8)
                 _apply_aptos_narrow(title_shape, font_color=text_color)
                 
                 # Set Subtitle / Punchline
                 left = Inches(0.5)
-                top = Inches(1.1)
-                width = Inches(8.0)
+                top = Inches(1.15)
+                width = Inches(10.0)
                 height = Inches(0.5)
                 txBox = slide.shapes.add_textbox(left, top, width, height)
                 tf = txBox.text_frame
+                tf.word_wrap = True
                 p = tf.add_paragraph()
                 p.text = s_data.get('punchline', '')
                 p.font.italic = True
@@ -1087,9 +1100,12 @@ Choose appropriate layout types (title_and_content, two_column).
                 
                 # Set Bullets
                 body_shape = slide.placeholders[1]
-                body_shape.top = Inches(1.7)
+                body_shape.left = Inches(0.5)
+                body_shape.top = Inches(1.8)
+                body_shape.width = SLIDE_WIDTH - Inches(1.0)
                 body_shape.height = Inches(5.0)
                 tf = body_shape.text_frame
+                tf.word_wrap = True
                 tf.text = "" # clear default
                 for bullet in s_data.get('bullet_points', []):
                     p = tf.add_paragraph()
@@ -1109,6 +1125,20 @@ Choose appropriate layout types (title_and_content, two_column).
                         slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
                 except:
                     pass
+                
+                # Two Column adjustment
+                if l_type == 'two_column' and len(slide.placeholders) > 2:
+                    body_shape.width = (SLIDE_WIDTH / 2) - Inches(0.75)
+                    
+                    right_body_shape = slide.placeholders[2]
+                    right_body_shape.left = (SLIDE_WIDTH / 2) + Inches(0.25)
+                    right_body_shape.top = Inches(1.8)
+                    right_body_shape.width = (SLIDE_WIDTH / 2) - Inches(0.75)
+                    right_body_shape.height = Inches(5.0)
+                    tf_right = right_body_shape.text_frame
+                    tf_right.word_wrap = True
+                    tf_right.text = "Additional Context / Visuals"
+                    _apply_aptos_narrow(right_body_shape, font_color=text_color)
             
             prs.save(output_path)
             
