@@ -1025,10 +1025,10 @@ def generate_artifacts_from_prompt(
         if not (has_genai or has_anthropic):
             raise Exception("No valid GenAI or Anthropic API key configured.")
             
-    if target_format.lower() == "pptx":
-        # AI prompt strictly enforcing the Presentation Creation Kit anatomy
-        _send_progress(webhook_url, "Generating presentation outline with AI...")
-        system_prompt = f"""You are an expert presentation designer and strategic consultant.
+        if target_format.lower() == "pptx":
+            # AI prompt strictly enforcing the Presentation Creation Kit anatomy
+            _send_progress(webhook_url, "Generating presentation outline with AI...")
+            system_prompt = f"""You are an expert presentation designer and strategic consultant.
 Create a {num_slides}-slide presentation outline on the following topic: {prompt}
 
 Presentation Style Constraint: {presentation_style}
@@ -1072,6 +1072,9 @@ Write the output in the JSON format matching this schema:
             output_path = os.path.join(run_dir, output_filename)
             
             prs, theme_colors = _create_themed_presentation(layout_theme)
+            bg_color = RGBColor(*theme_colors["bg"])
+            text_color = RGBColor(*theme_colors["text"])
+            theme_low = layout_theme.lower()
             
             _send_progress(webhook_url, "Generating presentation slides...")
             
