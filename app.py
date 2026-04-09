@@ -4,7 +4,7 @@ import tempfile
 import base64
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from pydantic import BaseModel
 import uvicorn
@@ -15,6 +15,20 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from starlette.middleware.wsgi import WSGIMiddleware
 
 app = FastAPI(title="PPTX Generator API", description="API and UI for generating PowerPoint presentations")
+
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class DynamicBaseUrlMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        # We calculate the public URL dynamically based on the incoming request headers 
+        # (especially from GCP Cloud Run load balancers)
+        if not os.environ.get("BASE_URL_FIXED"):
+            scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+            host = request.headers.get("x-forwarded-host", request.url.netloc)
+            os.environ["BASE_URL"] = f"{scheme}://{host}"
+        return await call_next(request)
+
+app.add_middleware(DynamicBaseUrlMiddleware)
 
 if os.environ.get("GCP_PROXY_FOR_CLAUD"):
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -654,7 +668,14 @@ class GenerateFromPromptRequest(BaseModel):
 
 @app.post("/api/generate-from-prompt")
 @app.post("/api/generate_from_prompt")
-async def api_generate_from_prompt(request: GenerateFromPromptRequest):
+async def api_generate_from_prompt(request: GenerateFromPromptRequest, req: Request):
+    base_url = os.environ.get("BASE_URL")
+    if not base_url:
+        scheme = req.headers.get("x-forwarded-proto", req.url.scheme)
+        host = req.headers.get("x-forwarded-host", req.url.netloc)
+        base_url = f"{scheme}://{host}"
+        os.environ["BASE_URL"] = base_url
+
     return generate_artifacts_from_prompt(
         prompt=request.prompt,
         target_format=request.target_format,

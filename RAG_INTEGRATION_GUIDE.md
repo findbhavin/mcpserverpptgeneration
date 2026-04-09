@@ -2,6 +2,24 @@
 
 This guide outlines how your Retrieval-Augmented Generation (RAG) framework should integrate with and utilize the `ppt-doc-generator` MCP Server to fulfill user requests for PowerPoint presentations (PPTX) and Word documents (DOCX).
 
+## 0. Strict Protocol Setup: Presentation Standardization (Templates/Themes)
+
+**Before you start generating a presentation, the RAG Agent MUST understand and enforce the following standards:**
+
+We do not just create blank slides. The MCP server utilizes a `_create_themed_presentation()` function that generates a robust, themed Master Slide.
+
+**The Strict Standards:**
+1. **Themed Master Slides:** Every presentation uses a consistent slide background color and elegant colored ribbons at the header and footer.
+2. **Typography:** The **Aptos Narrow** font is set uniformly across all elements.
+3. **Available Themes:** We support four distinct professional themes:
+   * `"Dark Corporate"`
+   * `"Modern Light"`
+   * `"Pastel"`
+   * `"Blue Accent"`
+4. **Dynamic Readability:** The slide elements (titles, punchlines, bullets, context sidebars) automatically adjust their colors (dark/light text) to ensure readability based on the selected theme.
+
+**Agent Requirement:** If the user does not specify a theme, the RAG Agent should **alternatively use some good default themes** (like "Modern Light" or "Dark Corporate") when calling the MCP tools.
+
 ## 1. Initial Handshake: Capability Discovery
 
 Before attempting to generate artifacts, the RAG agent should query the MCP Server's capabilities to understand the available tools, accepted formats, themes, and styles.
