@@ -31,7 +31,9 @@ urllib3.disable_warnings()
 
 class SlideData(BaseModel):
     title: str = Field(description="The main title for the slide")
-    punchline: str = Field(description="A catchy subtitle or narrative summary")
+    narrative: str = Field(description="1-2 line explanatory narrative under the title, setting up the slide's argument.", default="")
+    punchline: str = Field(description="One takeaway line; unique per slide, placed at the bottom.")
+    key_takeaway: str = Field(description="A single powerful sentence summarizing the strategic impact or core takeaway of the slide.", default="Strategic growth driver.")
     layout_type: str = Field(description="One of: title_and_content, two_column, diagram")
     bullet_points: list[str] = Field(description="The main content points extracted and summarized")
     icon_keyword: str = Field(description="A single keyword to search for an icon representing the slide's intent")
@@ -103,25 +105,28 @@ def _create_themed_presentation(theme_str: str):
     master.background.fill.solid()
     master.background.fill.fore_color.rgb = bg_color
     
-    # 2. Add an elegant accent ribbon at the very top (header)
-    top_ribbon = master.shapes.add_shape(
+    return prs, colors
+
+def _apply_theme_ribbons(slide, prs, colors):
+    """Adds the thematic ribbons to an individual slide since python-pptx doesn't support adding shapes to masters."""
+    from pptx.enum.shapes import MSO_SHAPE
+    accent_color = RGBColor(*colors["accent"])
+    
+    top_ribbon = slide.shapes.add_shape(
         MSO_SHAPE.RECTANGLE, 
         0, 0, prs.slide_width, Inches(0.15)
     )
     top_ribbon.fill.solid()
     top_ribbon.fill.fore_color.rgb = accent_color
-    top_ribbon.line.fill.background() # No border
+    top_ribbon.line.fill.background()
     
-    # 3. Add an elegant accent ribbon at the bottom (footer)
-    bottom_ribbon = master.shapes.add_shape(
+    bottom_ribbon = slide.shapes.add_shape(
         MSO_SHAPE.RECTANGLE, 
         0, prs.slide_height - Inches(0.3), prs.slide_width, Inches(0.3)
     )
     bottom_ribbon.fill.solid()
     bottom_ribbon.fill.fore_color.rgb = accent_color
     bottom_ribbon.line.fill.background()
-    
-    return prs, colors
 
 def _apply_aptos_narrow(shape, font_color=None):
     if not hasattr(shape, 'text_frame'):
@@ -490,6 +495,9 @@ def process_pdf_to_artifacts(
                                 slide_layout = prs.slide_layouts[6] # Blank
                                 slide = prs.slides.add_slide(slide_layout)
                                 
+                                # Apply theme ribbons
+                                _apply_theme_ribbons(slide, prs, theme_colors)
+                                
                                 # We keep the original image for diagrams
                                 _fit_image_to_slide(slide, img_path, SLIDE_WIDTH, SLIDE_HEIGHT, MARGIN)
                                 
@@ -521,25 +529,39 @@ def process_pdf_to_artifacts(
                                 title_shape.height = Inches(0.8)
                                 _apply_aptos_narrow(title_shape, font_color=RGBColor(*theme_colors["text"]))
                                 
-                                # Set Subtitle / Punchline
+                                # Set Narrative
                                 left = Inches(0.5)
-                                top = Inches(1.15)
-                                width = Inches(8.0)
+                                top = Inches(0.95)
+                                width = SLIDE_WIDTH - Inches(1.0)
                                 height = Inches(0.5)
                                 txBox = slide.shapes.add_textbox(left, top, width, height)
                                 tf = txBox.text_frame
                                 p = tf.add_paragraph()
+                                p.text = slide_data.get('narrative', '')
+                                p.font.size = Pt(16)
+                                p.font.color.rgb = RGBColor(*theme_colors["text"])
+                                _apply_aptos_narrow(txBox)
+                                
+                                # Set Punchline at bottom
+                                left = Inches(0.5)
+                                top = SLIDE_HEIGHT - Inches(0.8)
+                                width = SLIDE_WIDTH - Inches(1.0)
+                                height = Inches(0.4)
+                                txBox_punch = slide.shapes.add_textbox(left, top, width, height)
+                                tf_punch = txBox_punch.text_frame
+                                p = tf_punch.add_paragraph()
                                 p.text = slide_data.get('punchline', '')
                                 p.font.italic = True
+                                p.font.size = Pt(14)
                                 p.font.color.rgb = RGBColor(*theme_colors["subtext"])
-                                _apply_aptos_narrow(txBox)
+                                _apply_aptos_narrow(txBox_punch)
                                 
                                 # Set Bullets
                                 body_shape = slide.placeholders[1]
                                 body_shape.left = Inches(0.5)
-                                body_shape.top = Inches(1.8)
+                                body_shape.top = Inches(1.6)
                                 body_shape.width = SLIDE_WIDTH - Inches(1.0)
-                                body_shape.height = Inches(5.0)
+                                body_shape.height = Inches(4.8)
                                 tf = body_shape.text_frame
                                 tf.word_wrap = True
                                 tf.text = "" # clear default
@@ -1073,6 +1095,9 @@ Choose appropriate layout types (title_and_content, two_column).
                 fill.solid()
                 fill.fore_color.rgb = bg_color
                 
+                # Apply theme ribbons
+                _apply_theme_ribbons(slide, prs, theme_colors)
+                
                 # Set Title
                 title_shape = slide.shapes.title
                 title_shape.text = s_data.get('title', f"Slide {i + 1}")
@@ -1082,28 +1107,42 @@ Choose appropriate layout types (title_and_content, two_column).
                 title_shape.height = Inches(0.8)
                 _apply_aptos_narrow(title_shape, font_color=text_color)
                 
-                # Set Subtitle / Punchline
+                # Set Narrative
                 left = Inches(0.5)
-                top = Inches(1.15)
-                width = Inches(10.0)
+                top = Inches(0.95)
+                width = SLIDE_WIDTH - Inches(1.0)
                 height = Inches(0.5)
                 txBox = slide.shapes.add_textbox(left, top, width, height)
                 tf = txBox.text_frame
                 tf.word_wrap = True
                 p = tf.add_paragraph()
+                p.text = s_data.get('narrative', '')
+                p.font.size = Pt(16)
+                p.font.color.rgb = text_color
+                _apply_aptos_narrow(txBox)
+                
+                # Set Punchline at bottom
+                left = Inches(0.5)
+                top = SLIDE_HEIGHT - Inches(0.8)
+                width = SLIDE_WIDTH - Inches(1.0)
+                height = Inches(0.4)
+                txBox_punch = slide.shapes.add_textbox(left, top, width, height)
+                tf_punch = txBox_punch.text_frame
+                p = tf_punch.add_paragraph()
                 p.text = s_data.get('punchline', '')
                 p.font.italic = True
+                p.font.size = Pt(14)
                 # Dim the punchline slightly relative to text color
                 if "dark" in theme_low: p.font.color.rgb = RGBColor(180, 180, 180)
                 else: p.font.color.rgb = RGBColor(100, 100, 100)
-                _apply_aptos_narrow(txBox)
+                _apply_aptos_narrow(txBox_punch)
                 
                 # Set Bullets
                 body_shape = slide.placeholders[1]
                 body_shape.left = Inches(0.5)
-                body_shape.top = Inches(1.8)
+                body_shape.top = Inches(1.6)
                 body_shape.width = SLIDE_WIDTH - Inches(1.0)
-                body_shape.height = Inches(5.0)
+                body_shape.height = Inches(4.8)
                 tf = body_shape.text_frame
                 tf.word_wrap = True
                 tf.text = "" # clear default
@@ -1132,13 +1171,60 @@ Choose appropriate layout types (title_and_content, two_column).
                     
                     right_body_shape = slide.placeholders[2]
                     right_body_shape.left = (SLIDE_WIDTH / 2) + Inches(0.25)
-                    right_body_shape.top = Inches(1.8)
+                    right_body_shape.top = Inches(1.6)
                     right_body_shape.width = (SLIDE_WIDTH / 2) - Inches(0.75)
-                    right_body_shape.height = Inches(5.0)
+                    right_body_shape.height = Inches(4.8)
                     tf_right = right_body_shape.text_frame
                     tf_right.word_wrap = True
                     tf_right.text = "Additional Context / Visuals"
                     _apply_aptos_narrow(right_body_shape, font_color=text_color)
+                
+                # Strategic Impact Box (Bottom Ribbon / Takeaway)
+                takeaway_text = s_data.get('key_takeaway', '')
+                if takeaway_text:
+                    from pptx.enum.shapes import MSO_SHAPE
+                    rect = slide.shapes.add_shape(
+                        MSO_SHAPE.ROUNDED_RECTANGLE, 
+                        Inches(0.5), Inches(6.2), SLIDE_WIDTH - Inches(1.0), Inches(0.9)
+                    )
+                    rect.fill.solid()
+                    if "dark" in theme_low:
+                        rect.fill.fore_color.rgb = RGBColor(40, 45, 55)
+                        rect.line.color.rgb = RGBColor(100, 150, 255)
+                    else:
+                        rect.fill.fore_color.rgb = RGBColor(240, 245, 250)
+                        rect.line.color.rgb = header_bg_color
+                    
+                    tf_rect = rect.text_frame
+                    tf_rect.word_wrap = True
+                    
+                    # Bold Header
+                    p = tf_rect.paragraphs[0]
+                    p.text = "Strategic Takeaway"
+                    p.font.bold = True
+                    p.font.size = Pt(14)
+                    if "dark" in theme_low: p.font.color.rgb = RGBColor(255, 255, 255)
+                    else: p.font.color.rgb = header_bg_color
+                    
+                    # Takeaway Content
+                    p2 = tf_rect.add_paragraph()
+                    p2.text = takeaway_text
+                    p2.font.size = Pt(13)
+                    if "dark" in theme_low: p2.font.color.rgb = RGBColor(200, 200, 200)
+                    else: p2.font.color.rgb = RGBColor(80, 80, 80)
+                    
+                    _apply_aptos_narrow(rect)
+                
+                # Footer text
+                footer = slide.shapes.add_textbox(Inches(0.5), Inches(7.2), SLIDE_WIDTH - Inches(1.0), Inches(0.3))
+                tf_footer = footer.text_frame
+                p_footer = tf_footer.paragraphs[0]
+                p_footer.text = f"Slide {i + 1} of {len(slides_data)} | Generated via {layout_theme} Theme"
+                p_footer.font.size = Pt(10)
+                if "dark" in theme_low: p_footer.font.color.rgb = RGBColor(150, 150, 150)
+                else: p_footer.font.color.rgb = RGBColor(120, 120, 120)
+                p_footer.alignment = PP_ALIGN.RIGHT
+                _apply_aptos_narrow(footer)
             
             prs.save(output_path)
             
