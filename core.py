@@ -34,12 +34,39 @@ class SlideData(BaseModel):
     narrative: str = Field(description="1-2 line explanatory narrative under the title, setting up the slide's argument.", default="")
     punchline: str = Field(description="One takeaway line; unique per slide, placed at the bottom.")
     key_takeaway: str = Field(description="A single powerful sentence summarizing the strategic impact or core takeaway of the slide.", default="Strategic growth driver.")
-    layout_type: str = Field(description="One of: title_and_content, two_column, diagram")
+    layout_type: str = Field(
+        description="title_slide | section_divider | index_slide | title_and_content | two_column | diagram"
+    )
     slide_archetype: str = Field(description="Must be one of: title, agenda, divider, standard, table, deep_dive, roadmap, options", default="standard")
     bullet_points: list[str] = Field(description="Maximum 3-5 bullet points. The main content extracted and summarized.")
     table_data: list[list[str]] = Field(description="2D array of strings for table/matrix slides. First row is headers.", default=[])
-    icon_keyword: str = Field(description="A single keyword to search for an icon representing the slide's intent")
+    icon_keyword: str = Field(description="A single keyword for the AI-generated icon (DiceBear) that acts as the slide diagram; required on content slides.")
     keep_original_image: bool = Field(description="Set to true if the original image contains important visual data like a chart, diagram, or photo that should be kept on the slide.")
+
+
+class SlideLayoutPlanItem(BaseModel):
+    slide_index: int = Field(description="0-based index matching final deck order")
+    layout_type: str = Field(description="title_slide | section_divider | index_slide | title_and_content | two_column | diagram")
+    slide_archetype: str = Field(description="Archetype for this slide")
+    purpose_one_line: str = Field(description="What this slide must accomplish in one line")
+    visual_role: str = Field(description="How the AI icon will reinforce the message (one line)")
+
+
+class PresentationLayoutPlan(BaseModel):
+    deck_narrative: str = Field(description="2-5 sentences: story arc and flow of the entire deck")
+    slides: list[SlideLayoutPlanItem] = Field(description="Exactly one entry per slide, in order")
+
+
+class VisualQAItem(BaseModel):
+    slide_index: int = Field(description="0-based slide index")
+    severity: str = Field(description="low | medium | high")
+    issue: str = Field(description="Specific layout, overlap, or content balance issue")
+
+
+class VisualLayoutReviewResult(BaseModel):
+    round_summary: str = Field(description="Brief summary of this review pass")
+    issues: list[VisualQAItem] = Field(default_factory=list)
+    suggested_fixes: list[str] = Field(description="Concrete fixes to apply to slide copy or structure", default_factory=list)
 
 class PresentationData(BaseModel):
     slides: list[SlideData] = Field(description="List of generated slides")
@@ -788,6 +815,152 @@ SLIDE_WIDTH = Inches(13.333)
 SLIDE_HEIGHT = Inches(7.5)
 MARGIN = Inches(0.25)
 
+# Layout types / archetypes that do NOT require full content-slide anatomy (title + narrative + icon + punchline)
+_NON_CONTENT_LAYOUT_TYPES = frozenset({"title_slide", "section_divider", "index_slide"})
+_NON_CONTENT_ARCHETYPES = frozenset({"title", "divider", "agenda"})
+
+
+def _is_strict_content_slide(s: dict) -> bool:
+    """True when the slide must have title, narrative, AI icon (diagram), and punchline."""
+    lt = (s.get("layout_type") or "").lower().strip()
+    arch = (s.get("slide_archetype") or "").lower().strip()
+    if lt in _NON_CONTENT_LAYOUT_TYPES:
+        return False
+    if arch in _NON_CONTENT_ARCHETYPES:
+        return False
+    return True
+
+
+def _validate_strict_content_slides(slides: list) -> list[str]:
+    """Return human-readable validation errors for content-slide contract."""
+    errors = []
+    for i, s in enumerate(slides or []):
+        if not isinstance(s, dict):
+            errors.append(f"Slide {i}: invalid slide object.")
+            continue
+        if not _is_strict_content_slide(s):
+            continue
+        title = (s.get("title") or "").strip()
+        narrative = (s.get("narrative") or "").strip()
+        punchline = (s.get("punchline") or "").strip()
+        icon_kw = (s.get("icon_keyword") or "").strip()
+        arch = (s.get("slide_archetype") or "").lower().strip()
+        bullets = s.get("bullet_points") or []
+        table_data = s.get("table_data") or []
+
+        if not title:
+            errors.append(f"Slide {i}: content slide requires a non-empty title.")
+        if not narrative:
+            errors.append(f"Slide {i}: content slide requires a non-empty narrative.")
+        if not punchline:
+            errors.append(f"Slide {i}: content slide requires a non-empty punchline.")
+        if not icon_kw:
+            errors.append(f"Slide {i}: content slide requires icon_keyword for the AI-generated diagram/icon.")
+
+        if arch in ("table", "roadmap", "options") and table_data and len(table_data) >= 2:
+            pass
+        else:
+            non_empty_bullets = [b for b in bullets if isinstance(b, str) and b.strip()]
+            if len(non_empty_bullets) < 2:
+                errors.append(
+                    f"Slide {i}: content slide needs at least two substantive bullet points "
+                    f"(or a populated table_data for table/roadmap/options slides)."
+                )
+    return errors
+
+
+def _layout_regions_text_for_qa() -> str:
+    """Fixed layout coordinates (inches) used by the renderer — for AI visual-layout QA."""
+    return (
+        "Slide canvas: 13.333 x 7.5 inches (16:9). "
+        "Regions for standard content slides: "
+        "title box ~left 0.5 top 0.25 width ~12.83 height 0.8; "
+        "narrative textbox ~left 0.5 top 0.95 width ~11.18 (right margin reserved for 1\" icon + gap); "
+        "body/bullets placeholder ~left 0.5 top 1.6 width ~11.18 (same as narrative, clears icon column) height 4.8; "
+        "punchline ~left 0.5 top ~6.7 width ~12.83 height 0.4; "
+        "AI icon (diagram) ~left 11.5 top 0.5 size 1.0 x 1.0. "
+        "Flag overlap if narrative or title text would intrude into the icon band (right side) or if punchline collides with body."
+    )
+
+
+def _llm_json_structured(client, use_anthropic: bool, prompt: str, schema: type[BaseModel]) -> dict:
+    """Run structured JSON generation; returns a dict (Gemini or Anthropic)."""
+    if use_anthropic:
+        raw = _call_anthropic_text_with_retry(client, prompt, schema)
+        if isinstance(raw, str):
+            return json.loads(raw.strip())
+        return json.loads(str(raw))
+    response = _call_genai_text_with_retry(client, prompt, schema)
+    text = getattr(response, "text", None)
+    if not text:
+        raise Exception("LLM returned empty response for structured JSON")
+    return json.loads(text.strip())
+
+
+def _repair_presentation_slides(
+    client,
+    use_anthropic: bool,
+    slides: list,
+    validation_errors: list[str],
+    layout_plan: dict | None,
+    visual_notes: list[str] | None,
+) -> list:
+    """Ask the LLM to fix slide JSON while preserving deck order and slide count."""
+    plan_txt = json.dumps(layout_plan, indent=2) if layout_plan else "{}"
+    ve = "\n".join(validation_errors) if validation_errors else "(none — if visual notes exist, apply those.)"
+    vn = "\n".join(visual_notes or []) or "(none)"
+    prompt = f"""You are fixing a presentation JSON. The slides array must keep the SAME length and order (same number of slides).
+
+VALIDATION ERRORS TO FIX:
+{ve}
+
+VISUAL / LAYOUT NOTES FROM QA:
+{vn}
+
+APPROVED LAYOUT PLAN (must still be respected):
+{plan_txt}
+
+CURRENT SLIDES JSON:
+{json.dumps(slides, indent=2)}
+
+Rules for content slides (not title_slide, section_divider, index_slide, and not archetypes title/agenda/divider):
+- Every such slide MUST have: non-empty title, narrative, punchline, icon_keyword (for AI icon diagram), and at least two bullet points OR valid table_data for table slides.
+- Do not remove slides. Do not add slides. Fix fields only.
+
+Return ONLY JSON matching the PresentationData schema (top key \"slides\")."""
+    data = _llm_json_structured(client, use_anthropic, prompt, PresentationData)
+    return data.get("slides") or slides
+
+
+def _run_visual_layout_review(
+    client,
+    use_anthropic: bool,
+    slides: list,
+    layout_plan: dict | None,
+    round_idx: int,
+    previous: VisualLayoutReviewResult | None,
+) -> VisualLayoutReviewResult:
+    """One AI pass reviewing logical layout, crowding, and overlap risk from structured specs (no raster image)."""
+    prev_txt = ""
+    if previous and previous.issues:
+        prev_txt = f"\nPrevious round issues to verify or resolve:\n{json.dumps([i.model_dump() for i in previous.issues], indent=2)}\n"
+    prompt = f"""You are a senior presentation visual QA reviewer (round {round_idx} of 2).
+Review the deck for layout quality: overlap risk between title, narrative, body, punchline, and the top-right AI icon diagram.
+{_layout_regions_text_for_qa()}
+
+Deck narrative / plan:
+{json.dumps(layout_plan, indent=2) if layout_plan else "N/A"}
+
+Slides data:
+{json.dumps(slides, indent=2)}
+{prev_txt}
+Identify concrete issues (severity high if overlap or unreadable crowding likely). Suggest specific fixes to copy or structure.
+Be strict on content slides: they must remain complete (title, narrative, bullets/table, icon keyword, punchline).
+Return JSON matching the schema."""
+    data = _llm_json_structured(client, use_anthropic, prompt, VisualLayoutReviewResult)
+    return VisualLayoutReviewResult.model_validate(data)
+
+
 def _get_file_url(execution_id: str, filename: str) -> str:
     file_path = os.path.abspath(os.path.join(OUTPUT_DIR, execution_id, filename))
     base_url = os.environ.get("BASE_URL", "")
@@ -1026,48 +1199,96 @@ def generate_artifacts_from_prompt(
             raise Exception("No valid GenAI or Anthropic API key configured.")
             
         if target_format.lower() == "pptx":
-            # AI prompt strictly enforcing the Presentation Creation Kit anatomy
-            _send_progress(webhook_url, "Generating presentation outline with AI...")
+            # Phase A: advance layout plan (every slide's layout and role planned before content)
+            _send_progress(webhook_url, "Planning deck layout (story arc and per-slide layout)...")
+            plan_prompt = f"""You are an expert presentation strategist. Plan a {num_slides}-slide deck on this topic:
+{prompt}
+
+Style: {presentation_style}. Theme: {layout_theme}.
+
+Requirements:
+- Produce EXACTLY {num_slides} entries in \"slides\", indices 0..{num_slides - 1} in order.
+- Choose layout_type per slide: title_slide (opening), section_divider (chapter breaks), index_slide (agenda/TOC if needed), title_and_content, two_column, or diagram as appropriate.
+- slide_archetype must match intent: title, agenda, divider, standard, table, deep_dive, roadmap, options.
+- For each slide, state purpose_one_line and visual_role (how the AI icon will reinforce the message).
+
+Deck flow: Context/Vision -> Execution -> Options -> Architecture -> Roadmap -> Risks -> Recommendation where applicable.
+Use neutral wording (no JPL/JEMP unless user asked)."""
+            plan_dict = _llm_json_structured(client, use_anthropic, plan_prompt, PresentationLayoutPlan)
+            if len(plan_dict.get("slides") or []) != num_slides:
+                raise Exception(
+                    f"Layout plan must contain exactly {num_slides} slides; got {len(plan_dict.get('slides') or [])}."
+                )
+
+            # Phase B: full slide JSON following the approved plan
+            _send_progress(webhook_url, "Generating slide content from approved layout plan...")
             system_prompt = f"""You are an expert presentation designer and strategic consultant.
-Create a {num_slides}-slide presentation outline on the following topic: {prompt}
+Create a {num_slides}-slide presentation on the following topic: {prompt}
 
 Presentation Style Constraint: {presentation_style}
 Theme Concept: {layout_theme}
 
-STRICT SLIDE ANATOMY (Generic Presentation Kit):
-DO NOT brand this presentation with 'JPL', 'JEMP', or specific corporate tags unless explicitly requested by the user. Use neutral terms like 'The Organization' or 'The Platform'.
+APPROVED LAYOUT PLAN (you MUST follow slide order, layout_type, and archetype per index):
+{json.dumps(plan_dict, indent=2)}
 
-Each slide MUST be structured according to this strict contract:
-1. Title: A concise, impactful title.
-2. Narrative: A 1-2 line explanatory narrative setting up the slide's argument.
-3. Content/Visual: Provide 3-5 max bullet points with parallel grammar. Do not exceed 5 bullets.
-4. Archetypes: Assign a `slide_archetype` (title, agenda, divider, standard, table, deep_dive, roadmap, options).
-5. For 'table', 'roadmap', or 'options', provide `table_data` as a 2D array of strings where the first row is headers.
-6. Punchline: A single takeaway line summarizing the strategic impact. Unique per slide.
+STRICT VALIDATION RULES (Generic Presentation Kit):
+DO NOT brand with 'JPL', 'JEMP', or corporate tags unless the user asked. Use neutral terms.
 
-DECK STRUCTURE & STORYTELLING:
-- Storyline Flow: Context/Vision -> Execution Model (Tracks/Phases) -> Options -> Architecture -> Roadmap -> Risks -> Recommendation.
-- Define terms clearly (e.g., Track = enduring workstream; Project = deliverable).
-- No filler slides: every slide answers a question. Density over page-count chasing.
-- For comparisons/options, use the 'table' archetype to matrix the options against criteria.
+CONTENT SLIDES (all slides that are NOT title_slide, NOT section_divider, NOT index_slide, and NOT archetype title/agenda/divider) MUST EACH HAVE:
+1. title — non-empty
+2. narrative — non-empty (1-2 lines under the title)
+3. bullet_points — at least 2 substantive bullets OR, for table/roadmap/options archetypes, a proper table_data matrix
+4. icon_keyword — non-empty; this drives the AI-generated icon used as the slide's diagram/visual anchor (top-right)
+5. punchline — non-empty (one takeaway at the bottom)
 
-Write the output in the JSON format matching this schema:
-"""
-            if use_anthropic:
-                raw_text = _call_anthropic_text_with_retry(client, system_prompt, PresentationData)
-            else:
-                response = _call_genai_text_with_retry(client, system_prompt, PresentationData)
-                raw_text = response.text
-                
-            try:
-                raw_text = raw_text.strip()
-                if raw_text.startswith("```json"): raw_text = raw_text[7:]
-                elif raw_text.startswith("```"): raw_text = raw_text[3:]
-                if raw_text.endswith("```"): raw_text = raw_text[:-3]
-                data = json.loads(raw_text.strip())
-            except Exception as e:
-                raise Exception(f"Failed to parse LLM JSON: {e}")
-                
+NON-CONTENT SLIDES (title_slide, section_divider, index_slide, or archetypes title/agenda/divider): do not require the full five-part anatomy; keep them clean and readable.
+
+Each content slide MUST also respect the planned layout_type from the layout plan.
+
+DECK STRUCTURE:
+- Storyline Flow: Context/Vision -> Execution Model -> Options -> Architecture -> Roadmap -> Risks -> Recommendation.
+- For comparisons/options, use table_data where appropriate.
+
+Output JSON matching the PresentationData schema (top-level key \"slides\" only)."""
+            data = _llm_json_structured(client, use_anthropic, system_prompt, PresentationData)
+            slides_data = data.get("slides") or []
+            if len(slides_data) != num_slides:
+                raise Exception(f"Expected {num_slides} slides; model returned {len(slides_data)}.")
+
+            # Structural validation + LLM repair loop
+            for attempt in range(3):
+                errs = _validate_strict_content_slides(slides_data)
+                if not errs:
+                    break
+                _send_progress(webhook_url, f"Repairing slide data (validation pass {attempt + 1}/3)...")
+                slides_data = _repair_presentation_slides(
+                    client, use_anthropic, slides_data, errs, plan_dict, None
+                )
+            final_errs = _validate_strict_content_slides(slides_data)
+            if final_errs:
+                raise Exception("Slide validation failed after repair: " + "; ".join(final_errs[:12]))
+
+            # Two mandatory AI visual-layout QA rounds (overlap / crowding / balance vs. fixed regions)
+            _send_progress(webhook_url, "Visual QA review round 1 (layout and overlap risk)...")
+            vqa1 = _run_visual_layout_review(client, use_anthropic, slides_data, plan_dict, 1, None)
+            _send_progress(webhook_url, "Visual QA review round 2 (layout and overlap risk)...")
+            vqa2 = _run_visual_layout_review(client, use_anthropic, slides_data, plan_dict, 2, vqa1)
+            qa_notes = []
+            for r, tag in ((vqa1, "R1"), (vqa2, "R2")):
+                for it in r.issues:
+                    qa_notes.append(f"[{tag}] Slide {it.slide_index} ({it.severity}): {it.issue}")
+            qa_notes.extend(vqa2.suggested_fixes or [])
+            if qa_notes:
+                _send_progress(webhook_url, "Applying visual QA feedback to slide copy...")
+                slides_data = _repair_presentation_slides(
+                    client, use_anthropic, slides_data, [], plan_dict, qa_notes
+                )
+                fe = _validate_strict_content_slides(slides_data)
+                if fe:
+                    slides_data = _repair_presentation_slides(
+                        client, use_anthropic, slides_data, fe, plan_dict, None
+                    )
+
             output_filename = "generated_presentation.pptx"
             output_path = os.path.join(run_dir, output_filename)
             
@@ -1076,9 +1297,10 @@ Write the output in the JSON format matching this schema:
             text_color = RGBColor(*theme_colors["text"])
             theme_low = layout_theme.lower()
             
-            _send_progress(webhook_url, "Generating presentation slides...")
+            _send_progress(webhook_url, "Building presentation file...")
             
-            slides_data = data.get("slides", [])
+            # Narrative/title column: reserve right band for 1 inch AI icon + gap (reduces overlap with icon)
+            narrative_width = SLIDE_WIDTH - Inches(1.0) - Inches(1.15)
             for i, s_data in enumerate(slides_data):
                 l_type = s_data.get('layout_type', 'title_and_content')
                 
@@ -1107,10 +1329,10 @@ Write the output in the JSON format matching this schema:
                     title_shape = slide.shapes.title
                     title_shape.text = s_data.get('title', f"Slide {i + 1}")
                     
-                    if l_type not in ['title_slide', 'section_divider']:
+                    if l_type not in ['title_slide', 'section_divider', 'index_slide']:
                         title_shape.left = Inches(0.5)
                         title_shape.top = Inches(0.25)
-                        title_shape.width = SLIDE_WIDTH - Inches(1.0)
+                        title_shape.width = narrative_width if _is_strict_content_slide(s_data) else SLIDE_WIDTH - Inches(1.0)
                         title_shape.height = Inches(0.8)
                     
                     _apply_aptos_narrow(title_shape, font_color=text_color)
@@ -1125,12 +1347,30 @@ Write the output in the JSON format matching this schema:
                             _apply_aptos_narrow(subtitle_shape, font_color=RGBColor(*theme_colors["subtext"]))
                     continue # Skip narrative, punchline, bullets, icons for titles/dividers
 
+                # Index / agenda slide: title + bullet list only (no mandatory icon/narrative/punchline)
+                if l_type == 'index_slide':
+                    if len(slide.placeholders) > 1:
+                        body_shape = slide.placeholders[1]
+                        body_shape.left = Inches(0.5)
+                        body_shape.top = Inches(1.35)
+                        body_shape.width = SLIDE_WIDTH - Inches(1.0)
+                        body_shape.height = Inches(5.65)
+                        tf = body_shape.text_frame
+                        tf.word_wrap = True
+                        tf.text = ""
+                        for bullet in s_data.get('bullet_points', []) or []:
+                            p = tf.add_paragraph()
+                            p.text = bullet
+                            p.level = 0
+                        _apply_aptos_narrow(body_shape, font_color=text_color)
+                    continue
+
                 # --- Standard Content Slides ---
                 
                 # Set Narrative
                 left = Inches(0.5)
                 top = Inches(0.95)
-                width = SLIDE_WIDTH - Inches(1.0)
+                width = narrative_width
                 height = Inches(0.5)
                 txBox = slide.shapes.add_textbox(left, top, width, height)
                 tf = txBox.text_frame
@@ -1157,12 +1397,12 @@ Write the output in the JSON format matching this schema:
                 else: p.font.color.rgb = RGBColor(100, 100, 100)
                 _apply_aptos_narrow(txBox_punch)
                 
-                # Set Bullets
+                # Set Bullets (width matches narrative — keeps text out of the top-right icon column)
                 if len(slide.placeholders) > 1:
                     body_shape = slide.placeholders[1]
                     body_shape.left = Inches(0.5)
                     body_shape.top = Inches(1.6)
-                    body_shape.width = SLIDE_WIDTH - Inches(1.0)
+                    body_shape.width = narrative_width
                     body_shape.height = Inches(4.8)
                     tf = body_shape.text_frame
                     tf.word_wrap = True
