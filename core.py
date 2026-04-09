@@ -1078,51 +1078,51 @@ Write the output in the JSON format matching this schema:
             slides_data = data.get("slides", [])
             for i, s_data in enumerate(slides_data):
                 l_type = s_data.get('layout_type', 'title_and_content')
-                archetype = s_data.get('slide_archetype', 'standard')
                 
-                # Title Slide Archetype
-                if archetype == 'title':
-                    slide_layout = prs.slide_layouts[0] # Title layout
-                    slide = prs.slides.add_slide(slide_layout)
-                    slide.shapes.title.text = s_data.get('title', 'Presentation')
-                    _apply_aptos_narrow(slide.shapes.title, font_color=RGBColor(*theme_colors["text"]))
-                    if len(slide.placeholders) > 1:
-                        subtitle = slide.placeholders[1]
-                        subtitle.text = s_data.get('narrative', '') + "\n" + s_data.get('punchline', '')
-                        _apply_aptos_narrow(subtitle, font_color=RGBColor(*theme_colors["subtext"]))
-                    continue
-                    
-                # Section Divider Archetype
-                if archetype == 'divider':
-                    slide_layout = prs.slide_layouts[6] # Blank
-                    slide = prs.slides.add_slide(slide_layout)
-                    # Center huge text
-                    txBox = slide.shapes.add_textbox(Inches(1), Inches(3), SLIDE_WIDTH - Inches(2), Inches(1.5))
-                    tf = txBox.text_frame
-                    p = tf.add_paragraph()
-                    p.text = s_data.get('title', 'Section')
-                    p.font.size = Pt(44)
-                    p.font.bold = True
-                    p.font.color.rgb = RGBColor(*theme_colors["text"])
-                    p.alignment = PP_ALIGN.CENTER
-                    _apply_aptos_narrow(txBox)
-                    continue
-
-                if l_type == 'two_column':
+                if l_type == 'title_slide':
+                    slide_layout = prs.slide_layouts[0]
+                elif l_type == 'section_divider':
+                    slide_layout = prs.slide_layouts[2]
+                elif l_type == 'two_column':
                     slide_layout = prs.slide_layouts[3]
                 else:
                     slide_layout = prs.slide_layouts[1]
                     
                 slide = prs.slides.add_slide(slide_layout)
                 
-                # Set Title
-                title_shape = slide.shapes.title
-                title_shape.text = s_data.get('title', f"Slide {i + 1}")
-                title_shape.left = Inches(0.5)
-                title_shape.top = Inches(0.25)
-                title_shape.width = SLIDE_WIDTH - Inches(1.0)
-                title_shape.height = Inches(0.8)
-                _apply_aptos_narrow(title_shape, font_color=RGBColor(*theme_colors["text"]))
+                # Apply background color
+                background = slide.background
+                fill = background.fill
+                fill.solid()
+                fill.fore_color.rgb = bg_color
+                
+                # Apply theme ribbons
+                _apply_theme_ribbons(slide, prs, theme_colors)
+                
+                # Handle Title
+                if slide.shapes.title:
+                    title_shape = slide.shapes.title
+                    title_shape.text = s_data.get('title', f"Slide {i + 1}")
+                    
+                    if l_type not in ['title_slide', 'section_divider']:
+                        title_shape.left = Inches(0.5)
+                        title_shape.top = Inches(0.25)
+                        title_shape.width = SLIDE_WIDTH - Inches(1.0)
+                        title_shape.height = Inches(0.8)
+                    
+                    _apply_aptos_narrow(title_shape, font_color=text_color)
+                
+                # Title and Divider specific formatting
+                if l_type in ['title_slide', 'section_divider']:
+                    if len(slide.placeholders) > 1:
+                        subtitle_shape = slide.placeholders[1]
+                        subtitle_text = s_data.get('narrative', '') or s_data.get('punchline', '')
+                        if subtitle_text:
+                            subtitle_shape.text = subtitle_text
+                            _apply_aptos_narrow(subtitle_shape, font_color=RGBColor(*theme_colors["subtext"]))
+                    continue # Skip narrative, punchline, bullets, icons for titles/dividers
+
+                # --- Standard Content Slides ---
                 
                 # Set Narrative
                 left = Inches(0.5)
@@ -1135,7 +1135,7 @@ Write the output in the JSON format matching this schema:
                 p = tf.add_paragraph()
                 p.text = s_data.get('narrative', '')
                 p.font.size = Pt(16)
-                p.font.color.rgb = RGBColor(*theme_colors["text"])
+                p.font.color.rgb = text_color
                 _apply_aptos_narrow(txBox)
                 
                 # Set Punchline at bottom
@@ -1149,61 +1149,40 @@ Write the output in the JSON format matching this schema:
                 p.text = s_data.get('punchline', '')
                 p.font.italic = True
                 p.font.size = Pt(14)
-                p.font.color.rgb = RGBColor(*theme_colors["subtext"])
+                # Dim the punchline slightly relative to text color
+                if "dark" in theme_low: p.font.color.rgb = RGBColor(180, 180, 180)
+                else: p.font.color.rgb = RGBColor(100, 100, 100)
                 _apply_aptos_narrow(txBox_punch)
                 
-                # Render Table if archetype matches and data exists
-                if archetype in ['table', 'roadmap', 'options'] and s_data.get('table_data'):
-                    table_data = s_data.get('table_data')
-                    rows = len(table_data)
-                    cols = len(table_data[0]) if rows > 0 else 0
-                    if rows > 0 and cols > 0:
-                        # Clear default text box
-                        slide.placeholders[1].text_frame.text = ""
-                        # Add Table
-                        table_shape = slide.shapes.add_table(rows, cols, Inches(0.5), Inches(1.6), SLIDE_WIDTH - Inches(1.0), Inches(4.5))
-                        table = table_shape.table
-                        for r_idx, row_data in enumerate(table_data):
-                            for c_idx, cell_value in enumerate(row_data):
-                                if c_idx < cols:
-                                    cell = table.cell(r_idx, c_idx)
-                                    cell.text = str(cell_value)
-                                    _apply_aptos_narrow(cell.text_frame, font_color=RGBColor(*theme_colors["text"]))
-                                    if r_idx == 0: # Header
-                                        cell.fill.solid()
-                                        cell.fill.fore_color.rgb = RGBColor(*theme_colors["accent"])
-                                        for paragraph in cell.text_frame.paragraphs:
-                                            paragraph.font.color.rgb = RGBColor(255,255,255)
-                                            paragraph.font.bold = True
-                    continue
-                    
-                # Otherwise, Standard Bullets
-                body_shape = slide.placeholders[1]
-                body_shape.left = Inches(0.5)
-                body_shape.top = Inches(1.6)
-                body_shape.width = SLIDE_WIDTH - Inches(1.0)
-                body_shape.height = Inches(4.8)
-                tf = body_shape.text_frame
-                tf.word_wrap = True
-                tf.text = "" # clear default
-                for bullet in s_data.get('bullet_points', []):
-                    p = tf.add_paragraph()
-                    p.text = bullet
-                    p.level = 0
-                _apply_aptos_narrow(body_shape, font_color=RGBColor(*theme_colors["text"]))
+                # Set Bullets
+                if len(slide.placeholders) > 1:
+                    body_shape = slide.placeholders[1]
+                    body_shape.left = Inches(0.5)
+                    body_shape.top = Inches(1.6)
+                    body_shape.width = SLIDE_WIDTH - Inches(1.0)
+                    body_shape.height = Inches(4.8)
+                    tf = body_shape.text_frame
+                    tf.word_wrap = True
+                    tf.text = "" # clear default
+                    for bullet in s_data.get('bullet_points', []):
+                        p = tf.add_paragraph()
+                        p.text = bullet
+                        p.level = 0
+                    _apply_aptos_narrow(body_shape, font_color=text_color)
                 
                 # Add AI Generated Icon
                 icon_keyword = s_data.get('icon_keyword', 'presentation')
-                icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}&backgroundColor=ffffff"
-                try:
-                    icon_resp = requests.get(icon_url, verify=False, timeout=10)
-                    if icon_resp.status_code == 200:
-                        icon_path = os.path.join(run_dir, f"icon_{i}.png")
-                        with open(icon_path, "wb") as f:
-                            f.write(icon_resp.content)
-                        slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
-                except:
-                    pass
+                if icon_keyword:
+                    icon_url = f"https://api.dicebear.com/9.x/icons/png?seed={icon_keyword}&backgroundColor=ffffff"
+                    try:
+                        icon_resp = requests.get(icon_url, verify=False, timeout=10)
+                        if icon_resp.status_code == 200:
+                            icon_path = os.path.join(run_dir, f"icon_{i}.png")
+                            with open(icon_path, "wb") as f:
+                                f.write(icon_resp.content)
+                            slide.shapes.add_picture(icon_path, Inches(11.5), Inches(0.5), Inches(1), Inches(1))
+                    except:
+                        pass
                 
                 # Two Column adjustment
                 if l_type == 'two_column' and len(slide.placeholders) > 2:
@@ -1218,53 +1197,6 @@ Write the output in the JSON format matching this schema:
                     tf_right.word_wrap = True
                     tf_right.text = "Additional Context / Visuals"
                     _apply_aptos_narrow(right_body_shape, font_color=text_color)
-                
-                # Strategic Impact Box (Bottom Ribbon / Takeaway)
-                takeaway_text = s_data.get('key_takeaway', '')
-                if takeaway_text:
-                    from pptx.enum.shapes import MSO_SHAPE
-                    rect = slide.shapes.add_shape(
-                        MSO_SHAPE.ROUNDED_RECTANGLE, 
-                        Inches(0.5), Inches(6.2), SLIDE_WIDTH - Inches(1.0), Inches(0.9)
-                    )
-                    rect.fill.solid()
-                    if "dark" in theme_low:
-                        rect.fill.fore_color.rgb = RGBColor(40, 45, 55)
-                        rect.line.color.rgb = RGBColor(100, 150, 255)
-                    else:
-                        rect.fill.fore_color.rgb = RGBColor(240, 245, 250)
-                        rect.line.color.rgb = header_bg_color
-                    
-                    tf_rect = rect.text_frame
-                    tf_rect.word_wrap = True
-                    
-                    # Bold Header
-                    p = tf_rect.paragraphs[0]
-                    p.text = "Strategic Takeaway"
-                    p.font.bold = True
-                    p.font.size = Pt(14)
-                    if "dark" in theme_low: p.font.color.rgb = RGBColor(255, 255, 255)
-                    else: p.font.color.rgb = header_bg_color
-                    
-                    # Takeaway Content
-                    p2 = tf_rect.add_paragraph()
-                    p2.text = takeaway_text
-                    p2.font.size = Pt(13)
-                    if "dark" in theme_low: p2.font.color.rgb = RGBColor(200, 200, 200)
-                    else: p2.font.color.rgb = RGBColor(80, 80, 80)
-                    
-                    _apply_aptos_narrow(rect)
-                
-                # Footer text
-                footer = slide.shapes.add_textbox(Inches(0.5), Inches(7.2), SLIDE_WIDTH - Inches(1.0), Inches(0.3))
-                tf_footer = footer.text_frame
-                p_footer = tf_footer.paragraphs[0]
-                p_footer.text = f"Slide {i + 1} of {len(slides_data)} | Generated via {layout_theme} Theme"
-                p_footer.font.size = Pt(10)
-                if "dark" in theme_low: p_footer.font.color.rgb = RGBColor(150, 150, 150)
-                else: p_footer.font.color.rgb = RGBColor(120, 120, 120)
-                p_footer.alignment = PP_ALIGN.RIGHT
-                _apply_aptos_narrow(footer)
             
             prs.save(output_path)
             
