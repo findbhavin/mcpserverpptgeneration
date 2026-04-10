@@ -888,7 +888,7 @@ def process_pdf_to_artifacts(
                 
                 # Check for explicit key or environment key
                 use_anthropic = False
-                if api_key.startswith("sk-ant") or (not api_key and os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY")):
+                if api_key.startswith("sk-ant") or (not api_key and os.environ.get("ANTHROPIC_API_KEY")):
                     use_anthropic = True
                     
                 if use_anthropic:
@@ -907,7 +907,8 @@ def process_pdf_to_artifacts(
                         if api_key:
                             client = genai.Client(api_key=api_key)
                         elif os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-                            client = genai.Client()
+                            if not os.environ.get("GCP_PROXY_FOR_CLAUD"):
+                                client = genai.Client()
                         if client:
                             has_genai = True
                     except:
@@ -1715,8 +1716,6 @@ def image_to_presentation(
         if api_key.startswith("sk-ant") or (
             not api_key
             and os.environ.get("ANTHROPIC_API_KEY")
-            and not os.environ.get("GEMINI_API_KEY")
-            and not os.environ.get("GOOGLE_API_KEY")
         ):
             use_anthropic = True
         if use_anthropic:
@@ -1735,7 +1734,8 @@ def image_to_presentation(
                 if api_key:
                     client = genai.Client(api_key=api_key)
                 elif os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-                    client = genai.Client()
+                    if not os.environ.get("GCP_PROXY_FOR_CLAUD"):
+                        client = genai.Client()
                 if client:
                     has_genai = True
             except Exception:
@@ -1880,7 +1880,7 @@ def generate_artifacts_from_prompt(
         client = None
         
         use_anthropic = False
-        if api_key.startswith("sk-ant") or (not api_key and os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY")):
+        if api_key.startswith("sk-ant") or (not api_key and os.environ.get("ANTHROPIC_API_KEY")):
             use_anthropic = True
             
         if use_anthropic:
@@ -1899,7 +1899,9 @@ def generate_artifacts_from_prompt(
                 if api_key:
                     client = genai.Client(api_key=api_key)
                 elif os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-                    client = genai.Client()
+                    # DO NOT use Gemini if GCP proxy is configured (Anthropic only for proxy environment)
+                    if not os.environ.get("GCP_PROXY_FOR_CLAUD"):
+                        client = genai.Client()
                 if client:
                     has_genai = True
             except:
