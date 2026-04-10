@@ -195,14 +195,28 @@ THEMES = {
         "accent": (0, 80, 158),     # Navy blue
         "text": (10, 25, 47),       # Very dark blue text
         "subtext": (80, 90, 110)    # Mid blue-grey
-    }
+    },
+    # VoiceQA-style deck (aligned with voiceqaplatform/build_voiceqa_pptx.py): slate canvas, amber titles, green punchlines
+    "voiceqa dark": {
+        "bg": (30, 41, 59),
+        "accent": (251, 191, 36),
+        "title": (251, 191, 36),
+        "text": (226, 232, 240),
+        "subtext": (148, 163, 184),
+        "punchline": (34, 197, 94),
+    },
 }
 
 def _get_theme_colors(theme_str: str):
     t = theme_str.lower()
-    if "dark" in t: return THEMES["dark corporate"]
-    elif "pastel" in t: return THEMES["pastel"]
-    elif "blue" in t: return THEMES["blue accent"]
+    if "voiceqa" in t:
+        return THEMES["voiceqa dark"]
+    if "dark" in t:
+        return THEMES["dark corporate"]
+    elif "pastel" in t:
+        return THEMES["pastel"]
+    elif "blue" in t:
+        return THEMES["blue accent"]
     return THEMES["modern light"]
 
 def _create_themed_presentation(theme_str: str):
@@ -276,14 +290,15 @@ def _truncate_one_line_title(text: str, max_chars: int = DECK_TITLE_MAX_CHARS) -
     return cut.rstrip() + "…"
 
 
-def _dicebear_icon_url(seed: str) -> str:
+def _dicebear_icon_url(seed: str, bg_hex: str = "e8e8e8") -> str:
     s = quote((seed or "visual").strip()[:80], safe="")
-    return f"https://api.dicebear.com/9.x/icons/png?seed={s}&backgroundColor=e8e8e8&size=256"
+    bg = "".join(c for c in bg_hex.lower() if c in "0123456789abcdef")[:6] or "e8e8e8"
+    return f"https://api.dicebear.com/9.x/icons/png?seed={s}&backgroundColor={bg}&size=256"
 
 
-def _download_dicebear_icon(seed: str, dest_path: str) -> bool:
+def _download_dicebear_icon(seed: str, dest_path: str, bg_hex: str = "e8e8e8") -> bool:
     try:
-        r = requests.get(_dicebear_icon_url(seed), verify=False, timeout=20)
+        r = requests.get(_dicebear_icon_url(seed, bg_hex=bg_hex), verify=False, timeout=20)
         if r.status_code != 200 or len(r.content) < 80:
             logger.warning("DiceBear HTTP %s len=%s", r.status_code, len(r.content) if r.content else 0)
             return False
@@ -295,7 +310,14 @@ def _download_dicebear_icon(seed: str, dest_path: str) -> bool:
     return False
 
 
-def _style_slide_title_shape(shape, raw_text: str, text_color: RGBColor, *, truncate: bool = True) -> None:
+def _style_slide_title_shape(
+    shape,
+    raw_text: str,
+    text_color: RGBColor,
+    *,
+    truncate: bool = True,
+    font_pt: int | None = None,
+) -> None:
     shape.text = _truncate_one_line_title(raw_text) if truncate else (raw_text or "").strip()
     tf = shape.text_frame
     tf.word_wrap = False
@@ -303,35 +325,100 @@ def _style_slide_title_shape(shape, raw_text: str, text_color: RGBColor, *, trun
         tf.auto_size = MSO_AUTO_SIZE.NONE
     except Exception:
         pass
+    pt = font_pt if font_pt is not None else DECK_TITLE_PT
     for p in tf.paragraphs:
         p.alignment = PP_ALIGN.LEFT
-        p.font.size = Pt(DECK_TITLE_PT)
+        p.font.size = Pt(pt)
         p.font.bold = True
         p.font.color.rgb = text_color
     _apply_aptos_narrow(shape, font_color=text_color)
 
 
-def _add_strict_content_slide_infographic(
+def _deck_render_profile(theme_colors: dict, layout_theme: str) -> dict:
+    """VoiceQA-style decks use split text/visual columns; default uses infographic rows."""
+    t = (layout_theme or "").lower()
+    profile = {
+        "split_visual": False,
+        "title_pt": DECK_TITLE_PT,
+        "narrative_pt": DECK_NARRATIVE_PT,
+        "punchline_pt": DECK_PUNCHLINE_PT,
+        "bullet_pt": DECK_BULLET_PT,
+        "punchline_center": False,
+        "punchline_bold": False,
+        "dicebear_bg": "e8e8e8",
+    }
+    if "voiceqa" in t:
+        profile.update(
+            {
+                "split_visual": True,
+                "title_pt": 28,
+                "narrative_pt": 16,
+                "punchline_pt": 14,
+                "bullet_pt": 12,
+                "punchline_center": True,
+                "punchline_bold": True,
+                "dicebear_bg": "475569",
+            }
+        )
+    return profile
+
+
+def _title_color_from_theme(theme_colors: dict, text_color: RGBColor) -> RGBColor:
+    if "title" in theme_colors:
+        return RGBColor(*theme_colors["title"])
+    return text_color
+
+
+def _punchline_color_from_theme(theme_colors: dict) -> RGBColor:
+    if "punchline" in theme_colors:
+        return RGBColor(*theme_colors["punchline"])
+    return RGBColor(*theme_colors["subtext"])
+
+
+def _add_punchline_box(
+    slide,
+    punchline: str,
+    theme_colors: dict,
+    profile: dict,
+) -> None:
+    px = slide.shapes.add_textbox(
+        Inches(0.5), SLIDE_HEIGHT - Inches(0.85), SLIDE_WIDTH - Inches(1.0), Inches(0.48)
+    )
+    pr = px.text_frame.paragraphs[0]
+    pr.text = (punchline or "")[:420]
+    pr.font.italic = True
+    pr.font.bold = profile.get("punchline_bold", False)
+    pr.font.size = Pt(profile["punchline_pt"])
+    pr.font.color.rgb = _punchline_color_from_theme(theme_colors)
+    pr.alignment = PP_ALIGN.CENTER if profile.get("punchline_center") else PP_ALIGN.LEFT
+    _apply_aptos_narrow(px, font_color=pr.font.color.rgb)
+
+
+def _add_strict_content_slide_rows(
     slide,
     s_data: dict,
     run_dir: str,
     slide_idx: int,
     theme_colors: dict,
     text_color: RGBColor,
-    theme_low: str,
+    profile: dict,
+    title_color: RGBColor,
+    db_bg: str,
 ) -> None:
-    """Blank-layout slide: left-aligned title, narrative, infographic bullet rows (icon + text), punchline, hero icon."""
+    """Infographic rows: icon + bullet text; hero icon top-right."""
     narrative_width = SLIDE_WIDTH - Inches(1.0) - Inches(1.38)
     title_raw = s_data.get("title", f"Slide {slide_idx + 1}")
     tit = slide.shapes.add_textbox(Inches(0.5), Inches(0.22), narrative_width, Inches(0.62))
-    _style_slide_title_shape(tit, title_raw, text_color, truncate=True)
+    _style_slide_title_shape(
+        tit, title_raw, title_color, truncate=True, font_pt=profile["title_pt"]
+    )
 
     nx = slide.shapes.add_textbox(Inches(0.5), Inches(0.92), narrative_width, Inches(0.55))
     ntf = nx.text_frame
     ntf.word_wrap = True
     np = ntf.paragraphs[0]
     np.text = (s_data.get("narrative") or "")[:520]
-    np.font.size = Pt(DECK_NARRATIVE_PT)
+    np.font.size = Pt(profile["narrative_pt"])
     np.font.color.rgb = text_color
     np.alignment = PP_ALIGN.LEFT
     _apply_aptos_narrow(nx, font_color=text_color)
@@ -349,7 +436,7 @@ def _add_strict_content_slide_infographic(
         bt = row_top_in + j * row_h_in
         seed = seeds_in[j] if j < len(seeds_in) else f"{main_seed}-{j + 1}"
         ip = os.path.join(run_dir, f"row_icon_{slide_idx}_{j}.png")
-        if _download_dicebear_icon(seed, ip):
+        if _download_dicebear_icon(seed, ip, bg_hex=db_bg):
             slide.shapes.add_picture(ip, Inches(0.48), Inches(bt), Inches(0.74), Inches(0.74))
         tx = slide.shapes.add_textbox(
             Inches(1.34),
@@ -361,23 +448,117 @@ def _add_strict_content_slide_infographic(
         tf.word_wrap = True
         p = tf.paragraphs[0]
         p.text = bullet[:380]
-        p.font.size = Pt(DECK_BULLET_PT)
+        p.font.size = Pt(profile["bullet_pt"])
         p.font.color.rgb = text_color
         p.alignment = PP_ALIGN.LEFT
         _apply_aptos_narrow(tx, font_color=text_color)
 
-    px = slide.shapes.add_textbox(Inches(0.5), SLIDE_HEIGHT - Inches(0.82), SLIDE_WIDTH - Inches(1.0), Inches(0.42))
-    pr = px.text_frame.paragraphs[0]
-    pr.text = (s_data.get("punchline") or "")[:420]
-    pr.font.italic = True
-    pr.font.size = Pt(DECK_PUNCHLINE_PT)
-    pr.font.color.rgb = RGBColor(*theme_colors["subtext"])
-    pr.alignment = PP_ALIGN.LEFT
-    _apply_aptos_narrow(px, font_color=pr.font.color.rgb)
+    _add_punchline_box(slide, s_data.get("punchline") or "", theme_colors, profile)
 
     hero = os.path.join(run_dir, f"hero_icon_{slide_idx}.png")
-    if _download_dicebear_icon(main_seed, hero):
+    if _download_dicebear_icon(main_seed, hero, bg_hex=db_bg):
         slide.shapes.add_picture(hero, Inches(10.95), Inches(0.28), Inches(1.38), Inches(1.38))
+
+
+def _add_strict_content_slide_split(
+    slide,
+    s_data: dict,
+    run_dir: str,
+    slide_idx: int,
+    theme_colors: dict,
+    text_color: RGBColor,
+    profile: dict,
+    title_color: RGBColor,
+    db_bg: str,
+) -> None:
+    """VoiceQA-like: narrative + bullets in left column; icon grid + hero on the right (no screenshots)."""
+    left_w = Inches(6.15)
+    title_raw = s_data.get("title", f"Slide {slide_idx + 1}")
+    tit = slide.shapes.add_textbox(Inches(0.5), Inches(0.22), left_w, Inches(0.68))
+    _style_slide_title_shape(
+        tit, title_raw, title_color, truncate=True, font_pt=profile["title_pt"]
+    )
+
+    bullets = [b.strip() for b in (s_data.get("bullet_points") or []) if isinstance(b, str) and b.strip()][:5]
+    seeds_in = [str(x).strip() for x in (s_data.get("bullet_icon_seeds") or []) if str(x).strip()]
+    main_seed = (s_data.get("icon_keyword") or "theme").strip() or "theme"
+
+    body = slide.shapes.add_textbox(Inches(0.5), Inches(1.0), left_w, Inches(5.15))
+    tf = body.text_frame
+    tf.word_wrap = True
+    p0 = tf.paragraphs[0]
+    p0.text = (s_data.get("narrative") or "")[:520]
+    p0.font.size = Pt(profile["narrative_pt"])
+    p0.font.color.rgb = text_color
+    for bullet in bullets:
+        p = tf.add_paragraph()
+        p.text = f"• {bullet[:320]}"
+        p.level = 0
+        p.font.size = Pt(profile["bullet_pt"])
+        p.font.color.rgb = text_color
+    _apply_aptos_narrow(body, font_color=text_color)
+
+    _add_punchline_box(slide, s_data.get("punchline") or "", theme_colors, profile)
+
+    # Right visual column (similar footprint to screenshot panel in voiceqaplatform/build_voiceqa_pptx.py)
+    hx = Inches(6.85)
+    hero_path = os.path.join(run_dir, f"split_hero_{slide_idx}.png")
+    if _download_dicebear_icon(main_seed, hero_path, bg_hex=db_bg):
+        slide.shapes.add_picture(hero_path, hx, Inches(0.38), Inches(2.55), Inches(2.55))
+
+    grid_seeds = []
+    for i in range(4):
+        if i < len(seeds_in) and seeds_in[i]:
+            grid_seeds.append(seeds_in[i])
+        else:
+            grid_seeds.append(f"{main_seed}-{i + 1}")
+    positions = [(6.9, 3.15), (9.35, 3.15), (6.9, 4.85), (9.35, 4.85)]
+    for gi, (sx, sy) in enumerate(positions):
+        if gi >= len(grid_seeds):
+            break
+        gp = os.path.join(run_dir, f"split_grid_{slide_idx}_{gi}.png")
+        if _download_dicebear_icon(grid_seeds[gi], gp, bg_hex=db_bg):
+            slide.shapes.add_picture(gp, Inches(sx), Inches(sy), Inches(1.15), Inches(1.15))
+
+
+def _add_strict_content_slide_infographic(
+    slide,
+    s_data: dict,
+    run_dir: str,
+    slide_idx: int,
+    theme_colors: dict,
+    text_color: RGBColor,
+    theme_low: str,
+    layout_theme: str,
+) -> None:
+    """Blank-layout slide: VoiceQA-style split OR default infographic rows."""
+    profile = _deck_render_profile(theme_colors, layout_theme)
+    title_color = _title_color_from_theme(theme_colors, text_color)
+    db_bg = profile["dicebear_bg"]
+    if profile["split_visual"]:
+        _add_strict_content_slide_split(
+            slide,
+            s_data,
+            run_dir,
+            slide_idx,
+            theme_colors,
+            text_color,
+            profile,
+            title_color,
+            db_bg,
+        )
+    else:
+        _add_strict_content_slide_rows(
+            slide,
+            s_data,
+            run_dir,
+            slide_idx,
+            theme_colors,
+            text_color,
+            profile,
+            title_color,
+            db_bg,
+        )
 
 
 @retry(
@@ -1777,7 +1958,9 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
             bg_color = RGBColor(*theme_colors["bg"])
             text_color = RGBColor(*theme_colors["text"])
             theme_low = layout_theme.lower()
-            
+            title_accent_color = _title_color_from_theme(theme_colors, text_color)
+            voiceqa_title_pt = 32 if "voiceqa" in theme_low else None
+
             _send_progress(webhook_url, "Building presentation file...")
 
             for i, s_data in enumerate(slides_data):
@@ -1807,8 +1990,9 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                         _style_slide_title_shape(
                             slide.shapes.title,
                             s_data.get("title", f"Slide {i + 1}"),
-                            text_color,
+                            title_accent_color,
                             truncate=True,
+                            font_pt=voiceqa_title_pt,
                         )
                     if len(slide.placeholders) > 1:
                         subtitle_shape = slide.placeholders[1]
@@ -1824,8 +2008,9 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                         _style_slide_title_shape(
                             slide.shapes.title,
                             s_data.get("title", "Section"),
-                            text_color,
+                            title_accent_color,
                             truncate=True,
+                            font_pt=voiceqa_title_pt,
                         )
                     if len(slide.placeholders) > 1:
                         subtitle_shape = slide.placeholders[1]
@@ -1841,8 +2026,9 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                         _style_slide_title_shape(
                             slide.shapes.title,
                             s_data.get("title", "Agenda"),
-                            text_color,
+                            title_accent_color,
                             truncate=True,
+                            font_pt=voiceqa_title_pt,
                         )
                     if len(slide.placeholders) > 1:
                         body_shape = slide.placeholders[1]
@@ -1863,7 +2049,14 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
 
                 if is_strict:
                     _add_strict_content_slide_infographic(
-                        slide, s_data, run_dir, i, theme_colors, text_color, theme_low
+                        slide,
+                        s_data,
+                        run_dir,
+                        i,
+                        theme_colors,
+                        text_color,
+                        theme_low,
+                        layout_theme,
                     )
                     continue
 
@@ -1875,7 +2068,13 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                     ts.top = Inches(0.25)
                     ts.width = narrative_width
                     ts.height = Inches(0.8)
-                    _style_slide_title_shape(ts, s_data.get("title", f"Slide {i + 1}"), text_color, truncate=True)
+                    _style_slide_title_shape(
+                        ts,
+                        s_data.get("title", f"Slide {i + 1}"),
+                        title_accent_color,
+                        truncate=True,
+                        font_pt=voiceqa_title_pt,
+                    )
 
                 tx_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.95), narrative_width, Inches(0.5))
                 ntf = tx_box.text_frame
