@@ -890,6 +890,8 @@ def process_pdf_to_artifacts(
                 use_anthropic = False
                 if api_key.startswith("sk-ant") or (not api_key and os.environ.get("ANTHROPIC_API_KEY")):
                     use_anthropic = True
+                elif not api_key and os.environ.get("GCP_PROXY_FOR_CLAUD"):
+                    use_anthropic = True
                     
                 if use_anthropic:
                     try:
@@ -1712,12 +1714,18 @@ def image_to_presentation(
         has_genai = False
         has_anthropic = False
         client = None
+        # Only fallback to Gemini env vars if NOT using GCP proxy.
+        # When GCP_PROXY_FOR_CLAUD is set, we must strictly use Anthropic via proxy unless a Gemini key is explicitly passed.
         use_anthropic = False
         if api_key.startswith("sk-ant") or (
             not api_key
             and os.environ.get("ANTHROPIC_API_KEY")
         ):
             use_anthropic = True
+        elif not api_key and os.environ.get("GCP_PROXY_FOR_CLAUD"):
+            # Force Anthropic if running behind GCP proxy and no key explicitly requested
+            use_anthropic = True
+            
         if use_anthropic:
             try:
                 k = api_key if api_key else os.environ.get("ANTHROPIC_API_KEY")
@@ -1879,8 +1887,16 @@ def generate_artifacts_from_prompt(
         has_anthropic = False
         client = None
         
+        # Only fallback to Gemini env vars if NOT using GCP proxy.
+        # When GCP_PROXY_FOR_CLAUD is set, we must strictly use Anthropic via proxy unless a Gemini key is explicitly passed.
         use_anthropic = False
-        if api_key.startswith("sk-ant") or (not api_key and os.environ.get("ANTHROPIC_API_KEY")):
+        if api_key.startswith("sk-ant") or (
+            not api_key
+            and os.environ.get("ANTHROPIC_API_KEY")
+        ):
+            use_anthropic = True
+        elif not api_key and os.environ.get("GCP_PROXY_FOR_CLAUD"):
+            # Force Anthropic if running behind GCP proxy and no key explicitly requested
             use_anthropic = True
             
         if use_anthropic:
