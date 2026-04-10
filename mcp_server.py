@@ -1,5 +1,5 @@
 from mcp.server.fastmcp import FastMCP
-from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts
+from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, DEFAULT_LAYOUT_THEME
 
 mcp = FastMCP("pptx_generator")
 
@@ -59,7 +59,7 @@ def image_to_pptx(
     is_url: bool = True,
     webhook_url: str = None,
     api_key: str = "",
-    layout_theme: str = "Modern Light",
+    layout_theme: str = DEFAULT_LAYOUT_THEME,
 ) -> str:
     """
     Converts an image into an editable PPTX: vision extracts text and layout, then rebuilds the slide with
@@ -70,7 +70,7 @@ def image_to_pptx(
         is_url: True if image_source is a URL or file path or data URI, False if it's a raw base64 string.
         webhook_url: Optional webhook URL to POST the JSON result to.
         api_key: Optional Gemini or Anthropic API key (otherwise uses env vars).
-        layout_theme: Theme name for backgrounds/colors (e.g. Modern Light, Dark Corporate).
+        layout_theme: Theme name for backgrounds/colors (e.g. Studio Light, Studio Dark, Modern Light).
     Returns:
         A JSON string containing the 'success' boolean, 'message', and 'file_url'.
     """
@@ -80,7 +80,7 @@ def image_to_pptx(
         is_url,
         webhook_url=webhook_url,
         api_key=api_key or "",
-        layout_theme=layout_theme or "Modern Light",
+        layout_theme=layout_theme or DEFAULT_LAYOUT_THEME,
     )
     return json.dumps(result, indent=2)
 
@@ -104,7 +104,7 @@ def generate_from_prompt(
     prompt: str,
     target_format: str = "pptx",
     presentation_style: str = "Detailed",
-    layout_theme: str = "Modern Light",
+    layout_theme: str = DEFAULT_LAYOUT_THEME,
     num_slides: int = 5,
     webhook_url: str = None,
     api_key: str = ""
@@ -115,7 +115,7 @@ def generate_from_prompt(
         prompt: The main topic or prompt to generate the presentation/document from.
         target_format: 'pptx' or 'docx'.
         presentation_style: E.g., "Detailed", "Abstract", "Executive", "Minimalist".
-        layout_theme: E.g., "Dark Corporate", "Light Modern", "Pastel".
+        layout_theme: E.g., "Studio Light", "Studio Dark", "Dark Corporate", "Pastel".
         num_slides: Number of slides to generate (if pptx).
         webhook_url: Optional webhook URL to POST the JSON result to.
         api_key: AI API Key to use for content generation.
@@ -150,7 +150,16 @@ def get_capabilities() -> str:
                 "tool_name": "generate_from_prompt",
                 "description": "Dynamically generate full presentations (PPTX) or documents (DOCX) from abstract text prompts.",
                 "supported_formats": ["pptx", "docx"],
-                "supported_themes": ["Modern Light", "Dark Corporate", "Pastel", "Blue Accent"],
+                "supported_themes": [
+                    "Studio Light",
+                    "Studio Dark",
+                    "Presentation Light",
+                    "Presentation Dark",
+                    "Modern Light",
+                    "Dark Corporate",
+                    "Pastel",
+                    "Blue Accent",
+                ],
                 "supported_styles": ["Detailed", "Abstract", "Executive", "Minimalist"],
                 "ai_integration": "Uses Gemini or Anthropic to create content and DiceBear for iconography."
             },
@@ -186,7 +195,7 @@ def get_capabilities() -> str:
                 "Uses a robust, themed Master Slide instead of blank slides.",
                 "Consistent slide background color with elegant colored ribbons at the header and footer.",
                 "Aptos Narrow font is set uniformly across all elements.",
-                "Four distinct professional themes supported: 'Dark Corporate', 'Modern Light', 'Pastel', and 'Blue Accent'.",
+                "Default pair: Studio Light / Studio Dark (same as Presentation Light/Dark). Also: Modern Light, Dark Corporate, Pastel, Blue Accent. Optional split layout: add 'split layout' or 'two-panel' to the theme string.",
                 "Slide elements (titles, punchlines, bullets, context sidebars) automatically adjust their colors (dark/light text) to ensure readability based on the selected theme."
             ]
         }

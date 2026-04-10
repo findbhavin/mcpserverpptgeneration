@@ -196,8 +196,17 @@ THEMES = {
         "text": (10, 25, 47),       # Very dark blue text
         "subtext": (80, 90, 110)    # Mid blue-grey
     },
-    # VoiceQA-style deck (aligned with voiceqaplatform/build_voiceqa_pptx.py): slate canvas, amber titles, green punchlines
-    "voiceqa dark": {
+    # Default light canvas: cool neutral background, indigo ribbons, strong title/punchline contrast
+    "presentation light": {
+        "bg": (248, 250, 252),
+        "accent": (79, 70, 229),
+        "title": (15, 23, 42),
+        "text": (51, 65, 85),
+        "subtext": (100, 116, 139),
+        "punchline": (4, 120, 87),
+    },
+    # Dark canvas: slate background, warm titles, green punchlines
+    "presentation dark": {
         "bg": (30, 41, 59),
         "accent": (251, 191, 36),
         "title": (251, 191, 36),
@@ -207,17 +216,58 @@ THEMES = {
     },
 }
 
+# Canonical default for API/MCP; resolves to `presentation light` colors in `_get_theme_colors`.
+DEFAULT_LAYOUT_THEME = "Studio Light"
+
+
+def _is_dark_studio_theme(theme_str: str) -> bool:
+    """Dark default pair (Studio Dark / Presentation Dark); legacy alias: voiceqa."""
+    t = (theme_str or "").lower()
+    return (
+        "presentation dark" in t
+        or "studio dark" in t
+        or "voiceqa" in t
+    )
+
+
+def _wants_split_visual_layout(theme_str: str) -> bool:
+    """Two-column text + visual column; optional — not the default row+hero infographic."""
+    t = (theme_str or "").lower()
+    if any(
+        k in t
+        for k in (
+            "split-visual",
+            "split visual",
+            "split layout",
+            "split-panel",
+            "split panel",
+            "two-panel",
+            "two panel",
+            "two-column visual",
+            "two column visual",
+        )
+    ):
+        return True
+    return False
+
+
 def _get_theme_colors(theme_str: str):
-    t = theme_str.lower()
-    if "voiceqa" in t:
-        return THEMES["voiceqa dark"]
+    t = (theme_str or "").lower().strip()
+    if _is_dark_studio_theme(theme_str):
+        return THEMES["presentation dark"]
+    if "studio light" in t or "presentation light" in t:
+        return THEMES["presentation light"]
+    if "modern light" in t:
+        return THEMES["modern light"]
+    if "dark corporate" in t:
+        return THEMES["dark corporate"]
+    if "pastel" in t:
+        return THEMES["pastel"]
+    if "blue" in t:
+        return THEMES["blue accent"]
     if "dark" in t:
         return THEMES["dark corporate"]
-    elif "pastel" in t:
-        return THEMES["pastel"]
-    elif "blue" in t:
-        return THEMES["blue accent"]
-    return THEMES["modern light"]
+    return THEMES["presentation light"]
 
 def _create_themed_presentation(theme_str: str):
     """
@@ -335,8 +385,7 @@ def _style_slide_title_shape(
 
 
 def _deck_render_profile(theme_colors: dict, layout_theme: str) -> dict:
-    """VoiceQA-style decks use split text/visual columns; default uses infographic rows."""
-    t = (layout_theme or "").lower()
+    """Default: infographic rows with per-bullet + hero DiceBear icons. Optional split layout when theme asks for it."""
     profile = {
         "split_visual": False,
         "title_pt": DECK_TITLE_PT,
@@ -347,10 +396,9 @@ def _deck_render_profile(theme_colors: dict, layout_theme: str) -> dict:
         "punchline_bold": False,
         "dicebear_bg": "e8e8e8",
     }
-    if "voiceqa" in t:
+    if _is_dark_studio_theme(layout_theme):
         profile.update(
             {
-                "split_visual": True,
                 "title_pt": 28,
                 "narrative_pt": 16,
                 "punchline_pt": 14,
@@ -360,6 +408,8 @@ def _deck_render_profile(theme_colors: dict, layout_theme: str) -> dict:
                 "dicebear_bg": "475569",
             }
         )
+    if _wants_split_visual_layout(layout_theme):
+        profile["split_visual"] = True
     return profile
 
 
@@ -471,7 +521,7 @@ def _add_strict_content_slide_split(
     title_color: RGBColor,
     db_bg: str,
 ) -> None:
-    """VoiceQA-like: narrative + bullets in left column; icon grid + hero on the right (no screenshots)."""
+    """Optional split: narrative + bullets in left column; icon grid + hero on the right."""
     left_w = Inches(6.15)
     title_raw = s_data.get("title", f"Slide {slide_idx + 1}")
     tit = slide.shapes.add_textbox(Inches(0.5), Inches(0.22), left_w, Inches(0.68))
@@ -500,7 +550,7 @@ def _add_strict_content_slide_split(
 
     _add_punchline_box(slide, s_data.get("punchline") or "", theme_colors, profile)
 
-    # Right visual column (similar footprint to screenshot panel in voiceqaplatform/build_voiceqa_pptx.py)
+    # Right visual column (hero + small grid)
     hx = Inches(6.85)
     hero_path = os.path.join(run_dir, f"split_hero_{slide_idx}.png")
     if _download_dicebear_icon(main_seed, hero_path, bg_hex=db_bg):
@@ -531,7 +581,7 @@ def _add_strict_content_slide_infographic(
     theme_low: str,
     layout_theme: str,
 ) -> None:
-    """Blank-layout slide: VoiceQA-style split OR default infographic rows."""
+    """Blank-layout slide: optional split columns, or default row infographic with AI icons."""
     profile = _deck_render_profile(theme_colors, layout_theme)
     title_color = _title_color_from_theme(theme_colors, text_color)
     db_bg = profile["dicebear_bg"]
@@ -1617,7 +1667,7 @@ def image_to_presentation(
     is_url: bool = True,
     webhook_url: str = None,
     api_key: str = "",
-    layout_theme: str = "Modern Light",
+    layout_theme: str = DEFAULT_LAYOUT_THEME,
 ) -> dict:
     """
     Image → rich text/layout analysis → editable PPTX with textboxes, AI icons, optional source image panel.
@@ -1808,7 +1858,7 @@ def generate_artifacts_from_prompt(
     prompt: str,
     target_format: str = "pptx",
     presentation_style: str = "Detailed",
-    layout_theme: str = "Modern Light",
+    layout_theme: str = DEFAULT_LAYOUT_THEME,
     num_slides: int = 5,
     webhook_url: str = None,
     api_key: str = ""
@@ -1894,6 +1944,7 @@ APPROVED LAYOUT PLAN (you MUST follow slide order, layout_type, and archetype pe
 
 STRICT VALIDATION RULES (Generic Presentation Kit):
 DO NOT brand with 'JPL', 'JEMP', or corporate tags unless the user asked. Use neutral terms.
+Visuals: default themes render every content slide with AI-generated icons — one icon per bullet row plus a larger hero icon (DiceBear seeds from icon_keyword and bullet_icon_seeds). A two-column split layout is used only if the theme name includes phrases like "split layout" or "two-panel".
 
 CONTENT SLIDES (all slides that are NOT title_slide, NOT section_divider, NOT index_slide, and NOT archetype title/agenda/divider) MUST EACH HAVE:
 1. title — short headline only (about 10 words max, ~72 characters) so it stays on ONE line when rendered.
@@ -1959,7 +2010,7 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
             text_color = RGBColor(*theme_colors["text"])
             theme_low = layout_theme.lower()
             title_accent_color = _title_color_from_theme(theme_colors, text_color)
-            voiceqa_title_pt = 32 if "voiceqa" in theme_low else None
+            large_title_pt = 32 if _is_dark_studio_theme(layout_theme) else None
 
             _send_progress(webhook_url, "Building presentation file...")
 
@@ -1992,7 +2043,7 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                             s_data.get("title", f"Slide {i + 1}"),
                             title_accent_color,
                             truncate=True,
-                            font_pt=voiceqa_title_pt,
+                            font_pt=large_title_pt,
                         )
                     if len(slide.placeholders) > 1:
                         subtitle_shape = slide.placeholders[1]
@@ -2010,7 +2061,7 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                             s_data.get("title", "Section"),
                             title_accent_color,
                             truncate=True,
-                            font_pt=voiceqa_title_pt,
+                            font_pt=large_title_pt,
                         )
                     if len(slide.placeholders) > 1:
                         subtitle_shape = slide.placeholders[1]
@@ -2028,7 +2079,7 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                             s_data.get("title", "Agenda"),
                             title_accent_color,
                             truncate=True,
-                            font_pt=voiceqa_title_pt,
+                            font_pt=large_title_pt,
                         )
                     if len(slide.placeholders) > 1:
                         body_shape = slide.placeholders[1]
@@ -2073,7 +2124,7 @@ Output JSON matching the PresentationData schema (top-level key \"slides\" only)
                         s_data.get("title", f"Slide {i + 1}"),
                         title_accent_color,
                         truncate=True,
-                        font_pt=voiceqa_title_pt,
+                        font_pt=large_title_pt,
                     )
 
                 tx_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.95), narrative_width, Inches(0.5))

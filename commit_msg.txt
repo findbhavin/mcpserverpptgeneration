@@ -1,0 +1,8 @@
+feat: neutralize themes, default to Studio Light, add AI icons to default layout
+
+- Refactor `_deck_render_profile` and `_get_theme_colors` to use Studio Light / Studio Dark naming.
+- Make row-based AI icons (DiceBear) default for content slides.
+- Remove VoiceQA branding from UI/output, keeping `voiceqa` only as a legacy theme alias.
+- Use explicit split-layout opt-in via theme substring ("split layout").
+- Update API and MCP default themes to Studio Light.
+- Update RAG_INTERFACE_CONTRACT.md to reflect these changes.

@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, FileResponse, Response
 from pydantic import BaseModel
 import uvicorn
 
-from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, generate_artifacts_from_prompt, stats, generation_history, OUTPUT_DIR
+from core import generate_presentation, image_to_presentation, format_document, process_pdf_to_artifacts, generate_artifacts_from_prompt, stats, generation_history, OUTPUT_DIR, DEFAULT_LAYOUT_THEME
 from mcp_server import mcp
 from werkzeug.middleware.proxy_fix import ProxyFix
 from starlette.middleware.wsgi import WSGIMiddleware
@@ -59,7 +59,7 @@ class ImageRequest(BaseModel):
     is_url: bool = True
     webhook_url: str = None
     api_key: str = ""
-    layout_theme: str = "Modern Light"
+    layout_theme: str = DEFAULT_LAYOUT_THEME
 
 class DocxRequest(BaseModel):
     doc_source: str
@@ -618,7 +618,7 @@ async def index():
                                 prompt: inputVal,
                                 target_format: targetFormat,
                                 presentation_style: "Detailed", // Default
-                                layout_theme: "Modern Light", // Default
+                                layout_theme: "{DEFAULT_LAYOUT_THEME}", // Default
                                 num_slides: 5, // Default
                                 api_key: apiKey
                             }})
@@ -663,7 +663,7 @@ class GenerateFromPromptRequest(BaseModel):
     prompt: str
     target_format: str = "pptx"
     presentation_style: str = "Detailed"
-    layout_theme: str = "Modern Light"
+    layout_theme: str = DEFAULT_LAYOUT_THEME
     num_slides: int = 5
     webhook_url: Optional[str] = None
     api_key: str = ""
@@ -699,7 +699,7 @@ async def api_image_to_pptx(request: ImageRequest):
         request.is_url,
         request.webhook_url,
         api_key=request.api_key or "",
-        layout_theme=request.layout_theme or "Modern Light",
+        layout_theme=request.layout_theme or DEFAULT_LAYOUT_THEME,
     )
 
 @app.post("/api/format-docx")
