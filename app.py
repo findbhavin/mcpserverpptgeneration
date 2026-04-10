@@ -659,6 +659,12 @@ async def get_stats():
 async def get_history():
     return generation_history
 
+@app.get("/api/get_capabilities")
+async def api_get_capabilities():
+    from mcp_server import get_capabilities
+    import json
+    return json.loads(get_capabilities())
+
 class GenerateFromPromptRequest(BaseModel):
     prompt: str
     target_format: str = "pptx"
