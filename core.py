@@ -25,6 +25,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 import logging
 import anthropic
 
+DEFAULT_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
@@ -645,7 +647,7 @@ def _call_anthropic_with_retry(client, b64_img, prompt_text, schema: type[BaseMo
     try:
         schema_hint = json.dumps(schema.model_json_schema(), indent=2)
         response = client.messages.create(
-            model="claude-3-7-sonnet-20250219",
+            model=DEFAULT_ANTHROPIC_MODEL,
             max_tokens=8192,
             temperature=0.2,
             messages=[
@@ -707,7 +709,7 @@ def _call_genai_text_with_retry(client, prompt_text, schema):
 def _call_anthropic_text_with_retry(client, prompt_text, schema):
     try:
         response = client.messages.create(
-            model="claude-3-7-sonnet-20250219",
+            model=DEFAULT_ANTHROPIC_MODEL,
             max_tokens=8192,
             temperature=0.4,
             messages=[
